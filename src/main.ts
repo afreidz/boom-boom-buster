@@ -489,7 +489,6 @@ class BoomBoomBuster {
     });
 
     playBtn.addEventListener('click', () => {
-      document.documentElement.requestFullscreen().catch(() => {});
       splash.style.opacity = '0';
       setTimeout(() => { splash.style.display = 'none'; }, 600);
       this.startIntroAnimation();
@@ -1215,3 +1214,7 @@ class BoomBoomBuster {
 }
 
 new BoomBoomBuster();
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/sw.js');
+}
