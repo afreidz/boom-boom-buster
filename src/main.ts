@@ -18,6 +18,7 @@ class BoomBoomBuster {
   private busterLimbs: Matter.Body[] = [];
   private limbConstraints: Matter.Constraint[] = [];
   private ramp: Matter.Body | null = null;
+  private rampPlank: Matter.Body | null = null;
   private ground: Matter.Body | null = null;
   private buildings: Matter.Body[] = [];
   private buildingBricks: Matter.Body[] = [];
@@ -46,8 +47,12 @@ class BoomBoomBuster {
   private failsafeTimeout: number | null = null;
   private targetBuildingIndex: number = 0;
   private isDraggingAngle: boolean = false;
-  private arcRadius: number = 2000;
+  private angleCanvas: HTMLCanvasElement | null = null;
   private hitTargetBuilding: boolean = false;
+  private isRunning: boolean = false;
+  private runPhase: 'backup' | 'forward' | 'ramp' = 'backup';
+  private runSpeed: number = 0;
+  private busterRunBody: Matter.Body | null = null;
 
   private readonly WORLD_WIDTH = 18000;
   private readonly WORLD_HEIGHT = 1000;
@@ -130,6 +135,17 @@ class BoomBoomBuster {
     const groundY = this.WORLD_HEIGHT - 100;
     const busterY = groundY - 60;
 
+    // Single body used during run-up — sprite will be attached here
+    this.busterRunBody = Bodies.rectangle(busterX, busterY, bodyWidth, bodyHeight + headRadius * 2, {
+      isStatic: true,
+      friction: 0.5,
+      render: { fillStyle: '#FF6347' },
+      label: 'busterRunBody'
+    });
+
+    Composite.add(this.engine.world, this.busterRunBody);
+
+    // Ragdoll — created but NOT added to world yet, added at launch
     const head = Bodies.circle(busterX, busterY - 40, headRadius, {
       render: { fillStyle: '#FFD700' }
     });
@@ -145,9 +161,6 @@ class BoomBoomBuster {
       density: 0.008,
       frictionAir: 0.001
     });
-
-    Body.setAngle(this.buster, 0);
-    Body.setStatic(this.buster, true);
 
     const leftArm = Bodies.rectangle(busterX - 20, busterY - 10, limbWidth, limbLength, {
       render: { fillStyle: '#FF6347' },
@@ -180,11 +193,6 @@ class BoomBoomBuster {
       density: 0.006,
       frictionAir: 0.001
     });
-
-    Body.setStatic(leftArm, true);
-    Body.setStatic(rightArm, true);
-    Body.setStatic(leftLeg, true);
-    Body.setStatic(rightLeg, true);
 
     this.busterLimbs = [leftArm, rightArm, leftLeg, rightLeg];
 
@@ -229,9 +237,7 @@ class BoomBoomBuster {
     });
 
     this.limbConstraints = [leftArmConstraint, rightArmConstraint, leftLegConstraint, rightLegConstraint];
-
-    Composite.add(this.engine.world, [leftArm, rightArm, leftLeg, rightLeg, this.buster]);
-    Composite.add(this.engine.world, this.limbConstraints);
+    // Ragdoll is added to world in launchBuster()
   }
 
   private createRamp() {
@@ -241,6 +247,9 @@ class BoomBoomBuster {
   private updateRamp() {
     if (this.ramp) {
       Composite.remove(this.engine.world, this.ramp);
+    }
+    if (this.rampPlank) {
+      Composite.remove(this.engine.world, this.rampPlank);
     }
 
     const rampSlantLength = 600;
@@ -264,7 +273,17 @@ class BoomBoomBuster {
       render: { fillStyle: '#654321' }
     });
 
-    Composite.add(this.engine.world, this.ramp);
+    // Plank along the hypotenuse
+    const plankMidX = this.RAMP_START_X + rampLength / 2;
+    const plankMidY = groundY - wedgeHeight / 2;
+
+    this.rampPlank = Bodies.rectangle(plankMidX, plankMidY, rampSlantLength, 12, {
+      isStatic: true,
+      angle: angleRad,
+      render: { fillStyle: '#8B5E3C' }
+    });
+
+    Composite.add(this.engine.world, [this.ramp, this.rampPlank]);
   }
 
   private createBuildings() {
@@ -437,9 +456,11 @@ class BoomBoomBuster {
         }
       } else if (this.runComplete && this.outroAnimationStarted) {
         this.updateOutroAnimation();
-      } else if (this.gameStarted && this.buster && !this.isZooming) {
-        const busterX = this.buster.position.x;
-        const busterY = this.buster.position.y;
+      } else if (this.gameStarted && !this.isZooming) {
+        const followBody = this.busterRunBody ?? this.buster;
+        if (!followBody) return;
+        const busterX = followBody.position.x;
+        const busterY = followBody.position.y;
         const worldWidth = 2000;
         const aspectRatio = this.render.canvas.width / this.render.canvas.height;
         const worldHeight = worldWidth / aspectRatio;
@@ -590,19 +611,61 @@ class BoomBoomBuster {
 
       if (progress >= 1) {
         this.introAnimationPhase = 4;
-        const uiOverlay = document.getElementById('ui-overlay')!;
-        uiOverlay.style.display = 'flex';
+        document.getElementById('left-panel')!.style.display = 'flex';
+        document.getElementById('right-panel')!.style.display = 'flex';
       }
     }
   }
 
   private setupPhysicsEvents() {
     Events.on(this.engine, 'beforeUpdate', () => {
+      if (this.isRunning && this.busterRunBody) {
+        const pos = this.busterRunBody.position;
+        const groundY = this.WORLD_HEIGHT - 100;
+        const busterGroundY = groundY - 60;
+        const angleRad = -(this.rampAngle * Math.PI) / 180;
+        const rampSlantLength = 600;
+        const rampLength = Math.abs(Math.cos(angleRad) * rampSlantLength);
+
+        if (this.runPhase === 'backup') {
+          const backupTarget = this.BUSTER_START_X - 2000;
+          Body.setPosition(this.busterRunBody, { x: pos.x - 5, y: busterGroundY });
+          Body.setVelocity(this.busterRunBody, { x: -5, y: 0 });
+          Body.setAngle(this.busterRunBody, 0);
+          Body.setAngularVelocity(this.busterRunBody, 0);
+          if (pos.x <= backupTarget) {
+            this.runPhase = 'forward';
+            this.runSpeed = 2;
+          }
+        } else if (this.runPhase === 'forward') {
+          this.runSpeed = Math.min(this.runSpeed + 0.4, 50);
+          Body.setPosition(this.busterRunBody, { x: pos.x + this.runSpeed, y: busterGroundY });
+          Body.setVelocity(this.busterRunBody, { x: this.runSpeed, y: 0 });
+          Body.setAngle(this.busterRunBody, 0);
+          Body.setAngularVelocity(this.busterRunBody, 0);
+
+          if (pos.x >= this.RAMP_START_X) {
+            this.runPhase = 'ramp';
+          }
+        } else if (this.runPhase === 'ramp') {
+          const dx = Math.cos(angleRad) * this.runSpeed;
+          const dy = Math.sin(angleRad) * this.runSpeed;
+          Body.setPosition(this.busterRunBody, { x: pos.x + dx, y: pos.y + dy });
+          Body.setVelocity(this.busterRunBody, { x: dx, y: dy });
+          Body.setAngle(this.busterRunBody, angleRad);
+          Body.setAngularVelocity(this.busterRunBody, 0);
+
+          if (pos.x >= this.RAMP_START_X + rampLength) {
+            this.isRunning = false;
+            this.launchBuster();
+          }
+        }
+      }
+
       if (this.isFlying && this.buster) {
         Body.setAngle(this.buster, this.flightAngle);
         Body.setAngularVelocity(this.buster, 0);
       }
-
     });
 
     Events.on(this.engine, 'collisionStart', (event) => {
@@ -618,10 +681,6 @@ class BoomBoomBuster {
 
         const isBuilding = (body: Matter.Body) => {
           return this.buildings.includes(body);
-        };
-
-        const isGround = (body: Matter.Body) => {
-          return body === this.ground;
         };
 
         const isTargetBrick = (body: Matter.Body) => {
@@ -772,9 +831,8 @@ class BoomBoomBuster {
       if (!this.gameStarted) {
         this.startRun();
         (startBtn as HTMLButtonElement).disabled = true;
-
-        const uiOverlay = document.getElementById('ui-overlay')!;
-        uiOverlay.style.display = 'none';
+        document.getElementById('left-panel')!.style.display = 'none';
+        document.getElementById('right-panel')!.style.display = 'none';
       }
     });
 
@@ -785,134 +843,128 @@ class BoomBoomBuster {
   }
 
   private setupAngleArc() {
-    Events.on(this.render, 'afterRender', () => {
-      if (!this.gameStarted && this.initialViewSet) {
-        const ctx = this.render.context;
-        const canvas = this.render.canvas;
+    this.angleCanvas = document.getElementById('angle-canvas') as HTMLCanvasElement;
+    const ac = this.angleCanvas;
+    const ctx = ac.getContext('2d')!;
 
-        const arcCenterX = 2700;
-        const arcCenterY = this.WORLD_HEIGHT - 100;
+    const arcCX = ac.width - 105;
+    const arcCY = ac.height;
+    const arcR  = 85;
 
-        const bounds = this.render.bounds;
-        const canvasX = ((arcCenterX - bounds.min.x) / (bounds.max.x - bounds.min.x)) * canvas.width;
-        const canvasY = ((arcCenterY - bounds.min.y) / (bounds.max.y - bounds.min.y)) * canvas.height;
+    const drawPanel = () => {
+      ctx.clearRect(0, 0, ac.width, ac.height);
+      ctx.save();
 
-        const scale = canvas.width / (bounds.max.x - bounds.min.x);
-        const scaledRadius = this.arcRadius * scale;
+      // Arc track
+      const startAngle = (Math.PI / 180) * (10 - 90);
+      const endAngle   = (Math.PI / 180) * (80 - 90);
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 10;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(arcCX, arcCY, arcR, startAngle, endAngle);
+      ctx.stroke();
 
-        const startAngle = (Math.PI / 180) * (10 - 90);
-        const endAngle = (Math.PI / 180) * (80 - 90);
+      // Handle
+      const handleAngle = -(Math.PI / 180) * this.rampAngle;
+      const hx = arcCX + Math.cos(handleAngle) * arcR;
+      const hy = arcCY + Math.sin(handleAngle) * arcR;
+      ctx.fillStyle = '#ff9800';
+      ctx.beginPath();
+      ctx.arc(hx, hy, 14, 0, Math.PI * 2);
+      ctx.fill();
 
-        ctx.save();
-        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-        ctx.lineWidth = 6;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.arc(canvasX, canvasY, scaledRadius, startAngle, endAngle);
-        ctx.stroke();
+      // Ramp preview (left side of canvas, bottom-aligned)
+      this.drawRampPreview(ctx, ac.width, ac.height);
 
-        const handleAngle = -(Math.PI / 180) * this.rampAngle;
-        const handleX = canvasX + Math.cos(handleAngle) * scaledRadius;
-        const handleY = canvasY + Math.sin(handleAngle) * scaledRadius;
+      ctx.restore();
 
-        ctx.fillStyle = 'rgba(255, 152, 0, 0.9)';
-        ctx.beginPath();
-        ctx.arc(handleX, handleY, 15, 0, Math.PI * 2);
-        ctx.fill();
+      requestAnimationFrame(drawPanel);
+    };
 
-        ctx.restore();
-      }
-    });
+    drawPanel();
 
-    this.canvas.addEventListener('mousedown', (e) => this.handleAngleMouseDown(e));
-    this.canvas.addEventListener('mousemove', (e) => this.handleAngleMouseMove(e));
-    this.canvas.addEventListener('mouseup', () => this.handleAngleMouseUp());
-    this.canvas.addEventListener('mouseleave', () => this.handleAngleMouseUp());
+    const getLocalPos = (clientX: number, clientY: number) => {
+      const rect = ac.getBoundingClientRect();
+      const scaleX = ac.width / rect.width;
+      const scaleY = ac.height / rect.height;
+      return {
+        x: (clientX - rect.left) * scaleX,
+        y: (clientY - rect.top) * scaleY
+      };
+    };
 
-    this.canvas.addEventListener('touchstart', (e) => {
-      e.preventDefault();
-      const touch = e.touches[0];
-      const mouseEvent = new MouseEvent('mousedown', {
-        clientX: touch.clientX,
-        clientY: touch.clientY
-      });
-      this.handleAngleMouseDown(mouseEvent);
-    });
+    const onDown = (clientX: number, clientY: number) => {
+      if (this.gameStarted) return;
+      const { x, y } = getLocalPos(clientX, clientY);
+      const hAngle = -(Math.PI / 180) * this.rampAngle;
+      const hx = arcCX + Math.cos(hAngle) * arcR;
+      const hy = arcCY + Math.sin(hAngle) * arcR;
+      if (Math.hypot(x - hx, y - hy) < 40) this.isDraggingAngle = true;
+    };
 
-    this.canvas.addEventListener('touchmove', (e) => {
-      e.preventDefault();
-      const touch = e.touches[0];
-      const mouseEvent = new MouseEvent('mousemove', {
-        clientX: touch.clientX,
-        clientY: touch.clientY
-      });
-      this.handleAngleMouseMove(mouseEvent);
-    });
+    const onMove = (clientX: number, clientY: number) => {
+      if (!this.isDraggingAngle) return;
+      const { x, y } = getLocalPos(clientX, clientY);
+      const dx = x - arcCX;
+      const dy = y - arcCY;
+      let degrees = Math.atan2(dy, dx) * (180 / Math.PI) + 90;
+      degrees = Math.max(10, Math.min(80, degrees));
+      this.rampAngle = Math.round(90 - degrees);
+      this.updateRamp();
+    };
 
-    this.canvas.addEventListener('touchend', () => {
-      this.handleAngleMouseUp();
-    });
+    ac.addEventListener('mousedown', (e) => onDown(e.clientX, e.clientY));
+    ac.addEventListener('mousemove', (e) => onMove(e.clientX, e.clientY));
+    ac.addEventListener('mouseup', () => { this.isDraggingAngle = false; });
+    ac.addEventListener('mouseleave', () => { this.isDraggingAngle = false; });
+
+    ac.addEventListener('touchstart', (e) => { e.preventDefault(); onDown(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+    ac.addEventListener('touchmove',  (e) => { e.preventDefault(); onMove(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+    ac.addEventListener('touchend',   () => { this.isDraggingAngle = false; });
   }
 
-  private handleAngleMouseDown(e: MouseEvent) {
-    if (this.gameStarted || !this.initialViewSet) return;
+  private drawRampPreview(ctx: CanvasRenderingContext2D, _canvasW: number, canvasH: number) {
+    const groundY  = canvasH - 8;
+    const maxH     = canvasH - 16;
+    const maxW     = 110;
+    const angleRad = -(this.rampAngle * Math.PI) / 180;
 
-    const rect = this.canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
+    // Scale slant so 80° fits in maxH and any angle fits in maxW
+    const slantByH = maxH / Math.sin((80 * Math.PI) / 180);
+    const slantByW = maxW / Math.cos((10 * Math.PI) / 180);
+    const slant = Math.min(slantByH, slantByW);
 
-    const arcCenterX = 2700;
-    const arcCenterY = this.WORLD_HEIGHT - 100;
+    const w = Math.abs(Math.cos(angleRad) * slant);
+    const h = Math.abs(Math.sin(angleRad) * slant);
+    const baseX = 10;
 
-    const bounds = this.render.bounds;
-    const canvas = this.render.canvas;
-    const canvasX = ((arcCenterX - bounds.min.x) / (bounds.max.x - bounds.min.x)) * canvas.width;
-    const canvasY = ((arcCenterY - bounds.min.y) / (bounds.max.y - bounds.min.y)) * canvas.height;
+    // Ground line
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, groundY);
+    ctx.lineTo(baseX + maxW + 10, groundY);
+    ctx.stroke();
 
-    const scale = canvas.width / (bounds.max.x - bounds.min.x);
-    const scaledRadius = this.arcRadius * scale;
+    // Wedge
+    ctx.fillStyle = '#654321';
+    ctx.beginPath();
+    ctx.moveTo(baseX,     groundY);
+    ctx.lineTo(baseX + w, groundY);
+    ctx.lineTo(baseX + w, groundY - h);
+    ctx.closePath();
+    ctx.fill();
 
-    const handleAngle = -(Math.PI / 180) * this.rampAngle;
-    const handleX = canvasX + Math.cos(handleAngle) * scaledRadius;
-    const handleY = canvasY + Math.sin(handleAngle) * scaledRadius;
-
-    const distance = Math.sqrt(Math.pow(mouseX - handleX, 2) + Math.pow(mouseY - handleY, 2));
-
-    if (distance < 50) {
-      this.isDraggingAngle = true;
-    }
-  }
-
-  private handleAngleMouseMove(e: MouseEvent) {
-    if (!this.isDraggingAngle) return;
-
-    const rect = this.canvas.getBoundingClientRect();
-    const mouseX = e.clientX - rect.left;
-    const mouseY = e.clientY - rect.top;
-
-    const arcCenterX = 2700;
-    const arcCenterY = this.WORLD_HEIGHT - 100;
-
-    const bounds = this.render.bounds;
-    const canvas = this.render.canvas;
-    const canvasX = ((arcCenterX - bounds.min.x) / (bounds.max.x - bounds.min.x)) * canvas.width;
-    const canvasY = ((arcCenterY - bounds.min.y) / (bounds.max.y - bounds.min.y)) * canvas.height;
-
-    const dx = mouseX - canvasX;
-    const dy = mouseY - canvasY;
-    const angle = Math.atan2(dy, dx);
-
-    let degrees = angle * (180 / Math.PI) + 90;
-
-    degrees = Math.max(10, Math.min(80, degrees));
-
-    // Invert so ramp points toward handle
-    this.rampAngle = Math.round(90 - degrees);
-    this.updateRamp();
-  }
-
-  private handleAngleMouseUp() {
-    this.isDraggingAngle = false;
+    // Plank along hypotenuse
+    const midX = baseX + w / 2;
+    const midY = groundY - h / 2;
+    ctx.save();
+    ctx.translate(midX, midY);
+    ctx.rotate(angleRad);
+    ctx.fillStyle = '#8B5E3C';
+    ctx.fillRect(-slant / 2, -4, slant, 8);
+    ctx.restore();
   }
 
   private startSpeedMeter() {
@@ -972,26 +1024,43 @@ class BoomBoomBuster {
     this.zoomStartTime = Date.now();
 
     setTimeout(() => {
-      this.launchBuster();
+      this.startRunAnimation();
     }, 1000);
+  }
+
+  private startRunAnimation() {
+    if (!this.busterRunBody) return;
+
+    Body.setStatic(this.busterRunBody, false);
+
+    this.isRunning = true;
+    this.runPhase = 'backup';
+    this.runSpeed = 0;
   }
 
   private launchBuster() {
     if (!this.buster || !this.ramp) return;
 
-    Body.setStatic(this.buster, false);
-
-    this.busterLimbs.forEach(limb => {
-      Body.setStatic(limb, false);
-    });
-
     const angleRad = -(this.rampAngle * Math.PI) / 180;
 
-    const rampBackX = this.RAMP_START_X;
-    const groundY = this.WORLD_HEIGHT - 100;
-    const rampBackY = groundY - 60;
+    // Swap run body for ragdoll at the launch position
+    if (this.busterRunBody) {
+      const launchPos = this.busterRunBody.position;
+      Composite.remove(this.engine.world, this.busterRunBody);
+      this.busterRunBody = null;
 
-    Body.setPosition(this.buster, { x: rampBackX, y: rampBackY });
+      Body.setPosition(this.buster, { x: launchPos.x, y: launchPos.y });
+      this.busterLimbs.forEach((limb, i) => {
+        const offsets = [
+          { x: -20, y: -10 }, { x: 20, y: -10 },
+          { x: -10, y: 45 },  { x: 10, y: 45 }
+        ];
+        Body.setPosition(limb, { x: launchPos.x + offsets[i].x, y: launchPos.y + offsets[i].y });
+      });
+    }
+
+    Composite.add(this.engine.world, [this.busterLimbs[0], this.busterLimbs[1], this.busterLimbs[2], this.busterLimbs[3], this.buster]);
+    Composite.add(this.engine.world, this.limbConstraints);
 
     const launchSpeed = (this.speed / 100) * 180 + 80;
 
