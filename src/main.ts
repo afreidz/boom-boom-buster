@@ -50,6 +50,8 @@ class BoomBoomBuster {
   private targetBuildingIndex: number = 0;
   private isDraggingAngle: boolean = false;
   private angleCanvas: HTMLCanvasElement | null = null;
+  private busterIcon: HTMLImageElement | null = null;
+  private clouds: Array<{ x: number; y: number; r: number }> = [];
   private hitTargetBuilding: boolean = false;
   private isRunning: boolean = false;
   private runPhase: 'backup' | 'forward' | 'ramp' = 'backup';
@@ -82,7 +84,7 @@ class BoomBoomBuster {
         width: viewportWidth,
         height: viewportHeight,
         wireframes: false,
-        background: '#87CEEB'
+        background: 'transparent'
       }
     });
 
@@ -92,8 +94,23 @@ class BoomBoomBuster {
     const maxIndex = this.NUM_BUILDINGS - 2;
     this.targetBuildingIndex = Math.floor(Math.random() * (maxIndex - minIndex + 1)) + minIndex;
 
+    const img = new Image();
+    img.src = '/buster-icon.png';
+    img.onload = () => { this.busterIcon = img; };
+
+    // Clouds across the full playing field width (buildings end at ~35100)
+    const cloudFieldEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * 1000 + 800 + 2000;
+    for (let i = 0; i < 50; i++) {
+      this.clouds.push({
+        x: Math.random() * cloudFieldEnd,
+        y: -1500 - Math.random() * 2000,
+        r: 100 + Math.random() * 200
+      });
+    }
+
     this.setupLevel();
     this.setupControls();
+    this.setupBackground();
     this.setupCamera();
     this.setupPhysicsEvents();
 
@@ -105,6 +122,57 @@ class BoomBoomBuster {
     this.setupSplash();
 
     window.addEventListener('resize', () => this.handleResize());
+  }
+
+  private setupBackground() {
+    const groundY = this.WORLD_HEIGHT - 100;
+    const darkAltitude = -8000; // world Y where sky reaches its darkest
+
+    const skyColor = (worldY: number) => {
+      // t=0 at groundY (lightest), t=1 at darkAltitude (darkest)
+      const t = Math.max(0, Math.min(1, (groundY - worldY) / (groundY - darkAltitude)));
+      const r = Math.round(135 - t * (135 - 30));
+      const g = Math.round(206 - t * (206 - 50));
+      const b = Math.round(235 - t * (235 - 90));
+      return `rgb(${r},${g},${b})`;
+    };
+
+    Events.on(this.render, 'afterRender', () => {
+      const ctx = this.render.context;
+      const canvas = this.render.canvas;
+      const bounds = this.render.bounds;
+      const scaleX = canvas.width  / (bounds.max.x - bounds.min.x);
+      const scaleY = canvas.height / (bounds.max.y - bounds.min.y);
+
+      ctx.save();
+      ctx.globalCompositeOperation = 'destination-over';
+
+      // Clouds
+      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      for (const cloud of this.clouds) {
+        const sx = (cloud.x - bounds.min.x) * scaleX;
+        const sy = (cloud.y - bounds.min.y) * scaleY;
+        const sr = cloud.r * scaleX;
+        if (sx + sr * 2.5 < 0 || sx - sr * 2.5 > canvas.width) continue;
+        ctx.beginPath();
+        ctx.arc(sx,            sy,            sr,       0, Math.PI * 2);
+        ctx.arc(sx + sr * 1.2, sy - sr * 0.4, sr * 0.8, 0, Math.PI * 2);
+        ctx.arc(sx + sr * 2.2, sy,            sr * 0.9, 0, Math.PI * 2);
+        ctx.fill();
+      }
+
+      // Sky gradient — lightest at ground level, darkening upward over a long range
+      const groundScreenY = (groundY - bounds.min.y) * scaleY;
+      const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+      const groundStop = Math.max(0, Math.min(1, groundScreenY / canvas.height));
+      if (groundStop > 0) grad.addColorStop(0, skyColor(bounds.min.y));
+      grad.addColorStop(groundStop, skyColor(groundY));
+      if (groundStop < 1) grad.addColorStop(1, skyColor(groundY));
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+      ctx.restore();
+    });
   }
 
   private setupLevel() {
@@ -149,7 +217,7 @@ class BoomBoomBuster {
 
     // Ragdoll — created but NOT added to world yet, added at launch
     const head = Bodies.circle(busterX, busterY - 40, headRadius, {
-      render: { fillStyle: '#FFD700' }
+      render: { fillStyle: 'transparent', opacity: 0 }
     });
 
     const torso = Bodies.rectangle(busterX, busterY, bodyWidth, bodyHeight, {
@@ -412,6 +480,11 @@ class BoomBoomBuster {
 
   private setupCamera() {
     Events.on(this.render, 'afterRender', () => {
+      // Draw sprite FIRST using the same bounds the physics bodies were just rendered with.
+      // Updating the camera (Render.lookAt) changes render.bounds — doing that before
+      // drawing the sprite causes a one-frame offset that makes the sprite appear disconnected.
+      this.drawBusterSprite();
+
       if (!this.gameStarted && this.introAnimationPhase >= 0 && this.introAnimationPhase < 4) {
         this.updateIntroAnimation();
       } else if (!this.gameStarted && !this.initialViewSet && this.introAnimationPhase === 4) {
@@ -473,6 +546,42 @@ class BoomBoomBuster {
         });
       }
     });
+  }
+
+  private drawBusterSprite() {
+    if (!this.busterIcon) return;
+
+    const bounds = this.render.bounds;
+    const canvas = this.render.canvas;
+    const ctx = this.render.context;
+    const scaleX = canvas.width / (bounds.max.x - bounds.min.x);
+    const scaleY = canvas.height / (bounds.max.y - bounds.min.y);
+    const headRadius = 20;
+    const size = headRadius * 2 * scaleX;
+
+    const toScreen = (wx: number, wy: number) => ({
+      x: (wx - bounds.min.x) * scaleX,
+      y: (wy - bounds.min.y) * scaleY
+    });
+
+    const headYOffset = 40; // head is 40 world units above the run body center
+
+    if (this.isRunning && this.busterRunBody) {
+      const { x, y } = toScreen(this.busterRunBody.position.x, this.busterRunBody.position.y - headYOffset);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.drawImage(this.busterIcon, -size / 2, -size / 2, size, size);
+      ctx.restore();
+    } else if (this.buster && this.buster.parts.length > 2) {
+      // Draw at head part position, rotated with the body
+      const head = this.buster.parts[2];
+      const { x, y } = toScreen(head.position.x, head.position.y);
+      ctx.save();
+      ctx.translate(x, y);
+      ctx.rotate(head.angle);
+      ctx.drawImage(this.busterIcon, -size / 2, -size / 2, size, size);
+      ctx.restore();
+    }
   }
 
   private easeInOutCubic(t: number): number {
