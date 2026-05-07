@@ -1,0 +1,1073 @@
+import Matter from 'matter-js';
+
+const Engine = Matter.Engine;
+const Render = Matter.Render;
+const Runner = Matter.Runner;
+const Bodies = Matter.Bodies;
+const Composite = Matter.Composite;
+const Body = Matter.Body;
+const Events = Matter.Events;
+const Constraint = Matter.Constraint;
+
+class BoomBoomBuster {
+  private engine: Matter.Engine;
+  private render: Matter.Render;
+  private runner: Matter.Runner;
+  private canvas: HTMLCanvasElement;
+  private buster: Matter.Body | null = null;
+  private busterLimbs: Matter.Body[] = [];
+  private limbConstraints: Matter.Constraint[] = [];
+  private ramp: Matter.Body | null = null;
+  private ground: Matter.Body | null = null;
+  private buildings: Matter.Body[] = [];
+  private buildingBricks: Matter.Body[] = [];
+  private targetBuilding: Matter.Body[] = [];
+  private rampAngle: number = 45;
+  private speed: number = 50;
+  private speedIncreasing: boolean = true;
+  private speedInterval: number | null = null;
+  private gameStarted: boolean = false;
+  private initialViewSet: boolean = false;
+  private isFlying: boolean = false;
+  private flightAngle: number = 0;
+  private isZooming: boolean = false;
+  private zoomStartTime: number = 0;
+  private zoomDuration: number = 800;
+  private zoomStartBounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  private zoomEndBounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  private runComplete: boolean = false;
+  private limbsBroken: boolean = false;
+  private introAnimationPhase: number = -1;
+  private introAnimationStartTime: number = 0;
+  private outroAnimationStarted: boolean = false;
+  private outroAnimationStartTime: number = 0;
+  private outroStartBounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
+  private firstImpact: boolean = false;
+  private failsafeTimeout: number | null = null;
+  private targetBuildingIndex: number = 0;
+  private isDraggingAngle: boolean = false;
+  private arcRadius: number = 2000;
+  private hitTargetBuilding: boolean = false;
+
+  private readonly WORLD_WIDTH = 18000;
+  private readonly WORLD_HEIGHT = 1000;
+  private readonly BUSTER_START_X = 1675;
+  private readonly RAMP_START_X = 2025;
+  private readonly BUILDINGS_START_X = 5300;
+  private readonly NUM_BUILDINGS = 30;
+
+  constructor() {
+    this.canvas = document.getElementById('game-canvas') as HTMLCanvasElement;
+
+    this.engine = Engine.create({
+      gravity: { x: 0, y: 1, scale: 0.004 }
+    });
+
+    this.engine.timing.timeScale = 0.7;
+
+    const viewportWidth = window.innerWidth;
+    const viewportHeight = window.innerHeight;
+
+    this.render = Render.create({
+      canvas: this.canvas,
+      engine: this.engine,
+      options: {
+        width: viewportWidth,
+        height: viewportHeight,
+        wireframes: false,
+        background: '#87CEEB'
+      }
+    });
+
+    this.runner = Runner.create();
+
+    const minIndex = Math.floor(this.NUM_BUILDINGS / 2);
+    const maxIndex = this.NUM_BUILDINGS - 2;
+    this.targetBuildingIndex = Math.floor(Math.random() * (maxIndex - minIndex + 1)) + minIndex;
+
+    this.setupLevel();
+    this.setupControls();
+    this.setupCamera();
+    this.setupPhysicsEvents();
+
+    Render.run(this.render);
+    Runner.run(this.runner, this.engine);
+
+    this.startSpeedMeter();
+    this.startIntroAnimation();
+    this.setupAngleArc();
+
+    window.addEventListener('resize', () => this.handleResize());
+  }
+
+  private setupLevel() {
+    this.ground = Bodies.rectangle(
+      this.WORLD_WIDTH / 2,
+      this.WORLD_HEIGHT - 50,
+      this.WORLD_WIDTH * 5,
+      100,
+      {
+        isStatic: true,
+        render: { fillStyle: '#8B4513' }
+      }
+    );
+
+    this.createBuster();
+    this.createRamp();
+    this.createBuildings();
+
+    Composite.add(this.engine.world, [this.ground]);
+  }
+
+  private createBuster() {
+    const headRadius = 20;
+    const bodyWidth = 30;
+    const bodyHeight = 50;
+    const limbWidth = 10;
+    const limbLength = 40;
+
+    const busterX = this.BUSTER_START_X;
+    const groundY = this.WORLD_HEIGHT - 100;
+    const busterY = groundY - 60;
+
+    const head = Bodies.circle(busterX, busterY - 40, headRadius, {
+      render: { fillStyle: '#FFD700' }
+    });
+
+    const torso = Bodies.rectangle(busterX, busterY, bodyWidth, bodyHeight, {
+      render: { fillStyle: '#FF6347' }
+    });
+
+    this.buster = Body.create({
+      parts: [torso, head],
+      friction: 0.5,
+      restitution: 0.3,
+      density: 0.008,
+      frictionAir: 0.001
+    });
+
+    Body.setAngle(this.buster, 0);
+    Body.setStatic(this.buster, true);
+
+    const leftArm = Bodies.rectangle(busterX - 20, busterY - 10, limbWidth, limbLength, {
+      render: { fillStyle: '#FF6347' },
+      friction: 0.5,
+      restitution: 0.3,
+      density: 0.006,
+      frictionAir: 0.001
+    });
+
+    const rightArm = Bodies.rectangle(busterX + 20, busterY - 10, limbWidth, limbLength, {
+      render: { fillStyle: '#FF6347' },
+      friction: 0.5,
+      restitution: 0.3,
+      density: 0.006,
+      frictionAir: 0.001
+    });
+
+    const leftLeg = Bodies.rectangle(busterX - 10, busterY + 45, limbWidth, limbLength, {
+      render: { fillStyle: '#4169E1' },
+      friction: 0.5,
+      restitution: 0.3,
+      density: 0.006,
+      frictionAir: 0.001
+    });
+
+    const rightLeg = Bodies.rectangle(busterX + 10, busterY + 45, limbWidth, limbLength, {
+      render: { fillStyle: '#4169E1' },
+      friction: 0.5,
+      restitution: 0.3,
+      density: 0.006,
+      frictionAir: 0.001
+    });
+
+    Body.setStatic(leftArm, true);
+    Body.setStatic(rightArm, true);
+    Body.setStatic(leftLeg, true);
+    Body.setStatic(rightLeg, true);
+
+    this.busterLimbs = [leftArm, rightArm, leftLeg, rightLeg];
+
+    const leftArmConstraint = Constraint.create({
+      bodyA: this.buster,
+      bodyB: leftArm,
+      pointA: { x: -15, y: -10 },
+      pointB: { x: 0, y: -limbLength / 2 },
+      stiffness: 0.6,
+      length: 5,
+      render: { visible: false }
+    });
+
+    const rightArmConstraint = Constraint.create({
+      bodyA: this.buster,
+      bodyB: rightArm,
+      pointA: { x: 15, y: -10 },
+      pointB: { x: 0, y: -limbLength / 2 },
+      stiffness: 0.6,
+      length: 5,
+      render: { visible: false }
+    });
+
+    const leftLegConstraint = Constraint.create({
+      bodyA: this.buster,
+      bodyB: leftLeg,
+      pointA: { x: -10, y: 25 },
+      pointB: { x: 0, y: -limbLength / 2 },
+      stiffness: 0.6,
+      length: 5,
+      render: { visible: false }
+    });
+
+    const rightLegConstraint = Constraint.create({
+      bodyA: this.buster,
+      bodyB: rightLeg,
+      pointA: { x: 10, y: 25 },
+      pointB: { x: 0, y: -limbLength / 2 },
+      stiffness: 0.6,
+      length: 5,
+      render: { visible: false }
+    });
+
+    this.limbConstraints = [leftArmConstraint, rightArmConstraint, leftLegConstraint, rightLegConstraint];
+
+    Composite.add(this.engine.world, [leftArm, rightArm, leftLeg, rightLeg, this.buster]);
+    Composite.add(this.engine.world, this.limbConstraints);
+  }
+
+  private createRamp() {
+    this.updateRamp();
+  }
+
+  private updateRamp() {
+    if (this.ramp) {
+      Composite.remove(this.engine.world, this.ramp);
+    }
+
+    const rampSlantLength = 600;
+    const angleRad = -(this.rampAngle * Math.PI) / 180;
+    const groundY = this.WORLD_HEIGHT - 100;
+
+    const rampLength = Math.abs(Math.cos(angleRad) * rampSlantLength);
+    const wedgeHeight = Math.abs(Math.sin(angleRad) * rampSlantLength);
+
+    const vertices = [
+      { x: 0, y: 0 },
+      { x: rampLength, y: 0 },
+      { x: rampLength, y: -wedgeHeight }
+    ];
+
+    const centerX = this.RAMP_START_X + (2 * rampLength) / 3;
+    const centerY = groundY - wedgeHeight / 3;
+
+    this.ramp = Bodies.fromVertices(centerX, centerY, [vertices], {
+      isStatic: true,
+      render: { fillStyle: '#654321' }
+    });
+
+    Composite.add(this.engine.world, this.ramp);
+  }
+
+  private createBuildings() {
+    const buildingSpacing = 1000;
+    const buildingWidths = [300, 400, 500, 600, 700, 800];
+
+    for (let i = 0; i < this.NUM_BUILDINGS; i++) {
+      const x = this.BUILDINGS_START_X + i * buildingSpacing;
+      const isTarget = i === this.targetBuildingIndex;
+
+      const buildingWidth = buildingWidths[Math.floor(Math.random() * buildingWidths.length)];
+
+      const buildingHeights = [600, 800, 1000, 1200, 1400, 1600];
+
+      let height;
+      if (isTarget) {
+        height = 2000;
+      } else {
+        height = buildingHeights[Math.floor(Math.random() * buildingHeights.length)];
+      }
+
+      if (isTarget) {
+        this.createBrickBuilding(x, buildingWidth, height, true);
+      } else {
+        const buildingY = this.WORLD_HEIGHT - 100 - height / 2;
+        const building = Bodies.rectangle(x + buildingWidth / 2, buildingY, buildingWidth, height, {
+          isStatic: true,
+          render: {
+            fillStyle: '#A0A0A0',
+            strokeStyle: '#000',
+            lineWidth: 2
+          },
+          friction: 0.8,
+          restitution: 0.4,
+          label: `building_${i}`
+        });
+
+        this.buildings.push(building);
+        Composite.add(this.engine.world, building);
+      }
+    }
+  }
+
+  private createBrickBuilding(x: number, width: number, height: number, isTarget: boolean) {
+    const brickWidth = 100;
+    const brickHeight = 60;
+    const groundY = this.WORLD_HEIGHT - 100;
+
+    const cols = Math.floor(width / brickWidth);
+    const rows = Math.floor(height / brickHeight);
+
+    for (let row = 0; row < rows; row++) {
+      for (let col = 0; col < cols; col++) {
+        const brickX = x + col * brickWidth + brickWidth / 2;
+        const brickY = groundY - row * brickHeight - brickHeight / 2;
+
+        const brick = Bodies.rectangle(brickX, brickY, brickWidth, brickHeight, {
+          isStatic: true,
+          render: {
+            fillStyle: isTarget ? '#FF0000' : '#A0A0A0',
+            strokeStyle: '#000',
+            lineWidth: 1
+          },
+          friction: 0.8,
+          restitution: 0.05,
+          density: 0.002,
+          frictionAir: 0.15,
+          label: isTarget ? 'target_brick' : 'brick'
+        });
+
+        if (isTarget) {
+          this.targetBuilding.push(brick);
+        } else {
+          this.buildingBricks.push(brick);
+        }
+
+        Composite.add(this.engine.world, brick);
+      }
+    }
+  }
+
+
+  private explodeBuilding(building: Matter.Body) {
+    const buildingBounds = building.bounds;
+    const buildingX = (buildingBounds.min.x + buildingBounds.max.x) / 2;
+    const buildingWidth = buildingBounds.max.x - buildingBounds.min.x;
+    const buildingHeight = buildingBounds.max.y - buildingBounds.min.y;
+
+    Composite.remove(this.engine.world, building);
+
+    const index = this.buildings.indexOf(building);
+    if (index > -1) {
+      this.buildings.splice(index, 1);
+    }
+
+    this.createBrickBuilding(buildingX - buildingWidth / 2, buildingWidth, buildingHeight, false);
+
+    const centerX = (buildingBounds.min.x + buildingBounds.max.x) / 2;
+    const centerY = (buildingBounds.min.y + buildingBounds.max.y) / 2;
+
+    this.buildingBricks.forEach(brick => {
+      if (brick.position.x >= buildingBounds.min.x - 50 &&
+          brick.position.x <= buildingBounds.max.x + 50 &&
+          brick.position.y >= buildingBounds.min.y - 50 &&
+          brick.position.y <= buildingBounds.max.y + 50) {
+
+        Body.setStatic(brick, false);
+
+        const dx = brick.position.x - centerX;
+        const dy = brick.position.y - centerY;
+        const angle = Math.atan2(dy, dx);
+
+        const explosionForce = 25;
+        const randomMagnitude = 0.7 + Math.random() * 0.6;
+
+        const forceX = Math.cos(angle) * explosionForce * randomMagnitude;
+        const forceY = Math.sin(angle) * explosionForce * randomMagnitude;
+
+        Body.setVelocity(brick, { x: forceX, y: forceY });
+        Body.setAngularVelocity(brick, (Math.random() - 0.5) * 0.4);
+      }
+    });
+  }
+
+  private setupCamera() {
+    Events.on(this.render, 'afterRender', () => {
+      if (!this.gameStarted && this.introAnimationPhase >= 0 && this.introAnimationPhase < 4) {
+        this.updateIntroAnimation();
+      } else if (!this.gameStarted && !this.initialViewSet && this.introAnimationPhase === 4) {
+        const buildingSpacing = 1000;
+        const buildingWidths = [300, 400, 500, 600, 700, 800];
+        const maxBuildingWidth = Math.max(...buildingWidths);
+
+        const lastBuildingEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * buildingSpacing + maxBuildingWidth;
+
+        const padding = 500;
+        const minX = this.BUSTER_START_X - padding;
+        const maxX = lastBuildingEnd + padding;
+
+        const viewWidth = maxX - minX;
+        const aspectRatio = this.render.canvas.width / this.render.canvas.height;
+        const viewHeight = viewWidth / aspectRatio;
+
+        const centerX = (minX + maxX) / 2;
+        const centerY = this.WORLD_HEIGHT / 2;
+
+        Render.lookAt(this.render, {
+          min: { x: centerX - viewWidth / 2, y: centerY - viewHeight / 2 },
+          max: { x: centerX + viewWidth / 2, y: centerY + viewHeight / 2 }
+        });
+
+        this.initialViewSet = true;
+      } else if (this.isZooming) {
+        const elapsed = Date.now() - this.zoomStartTime;
+        const progress = Math.min(elapsed / this.zoomDuration, 1);
+        const eased = this.easeInOutCubic(progress);
+
+        const minX = this.zoomStartBounds.minX + (this.zoomEndBounds.minX - this.zoomStartBounds.minX) * eased;
+        const maxX = this.zoomStartBounds.maxX + (this.zoomEndBounds.maxX - this.zoomStartBounds.maxX) * eased;
+        const minY = this.zoomStartBounds.minY + (this.zoomEndBounds.minY - this.zoomStartBounds.minY) * eased;
+        const maxY = this.zoomStartBounds.maxY + (this.zoomEndBounds.maxY - this.zoomStartBounds.maxY) * eased;
+
+        Render.lookAt(this.render, {
+          min: { x: minX, y: minY },
+          max: { x: maxX, y: maxY }
+        });
+
+        if (progress >= 1) {
+          this.isZooming = false;
+        }
+      } else if (this.runComplete && this.outroAnimationStarted) {
+        this.updateOutroAnimation();
+      } else if (this.gameStarted && this.buster && !this.isZooming) {
+        const busterX = this.buster.position.x;
+        const busterY = this.buster.position.y;
+        const worldWidth = 2000;
+        const aspectRatio = this.render.canvas.width / this.render.canvas.height;
+        const worldHeight = worldWidth / aspectRatio;
+
+        Render.lookAt(this.render, {
+          min: { x: busterX - worldWidth / 2, y: busterY - worldHeight / 2 },
+          max: { x: busterX + worldWidth / 2, y: busterY + worldHeight / 2 }
+        });
+      }
+    });
+  }
+
+  private easeInOutCubic(t: number): number {
+    return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
+  }
+
+  private startIntroAnimation() {
+    this.introAnimationPhase = 0;
+    this.introAnimationStartTime = Date.now();
+  }
+
+  private startOutroAnimation() {
+    this.outroAnimationStarted = true;
+    this.outroAnimationStartTime = Date.now();
+    this.outroStartBounds = {
+      minX: this.render.bounds.min.x,
+      maxX: this.render.bounds.max.x,
+      minY: this.render.bounds.min.y,
+      maxY: this.render.bounds.max.y
+    };
+  }
+
+  private updateOutroAnimation() {
+    const elapsed = Date.now() - this.outroAnimationStartTime;
+    const outroDuration = 2000;
+    const progress = Math.min(elapsed / outroDuration, 1);
+    const eased = this.easeInOutCubic(progress);
+
+    const buildingSpacing = 1000;
+    const buildingWidths = [300, 400, 500, 600, 700, 800];
+    const maxBuildingWidth = Math.max(...buildingWidths);
+    const lastBuildingEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * buildingSpacing + maxBuildingWidth;
+
+    const padding = 500;
+    const finalMinX = this.BUSTER_START_X - padding;
+    const finalMaxX = lastBuildingEnd + padding;
+    const finalViewWidth = finalMaxX - finalMinX;
+    const aspectRatio = this.render.canvas.width / this.render.canvas.height;
+    const finalViewHeight = finalViewWidth / aspectRatio;
+    const finalCenterX = (finalMinX + finalMaxX) / 2;
+    const finalCenterY = this.WORLD_HEIGHT / 2;
+
+    const startMinX = this.outroStartBounds.minX;
+    const startMaxX = this.outroStartBounds.maxX;
+    const startMinY = this.outroStartBounds.minY;
+    const startMaxY = this.outroStartBounds.maxY;
+
+    const currentMinX = startMinX + (finalCenterX - finalViewWidth / 2 - startMinX) * eased;
+    const currentMaxX = startMaxX + (finalCenterX + finalViewWidth / 2 - startMaxX) * eased;
+    const currentMinY = startMinY + (finalCenterY - finalViewHeight / 2 - startMinY) * eased;
+    const currentMaxY = startMaxY + (finalCenterY + finalViewHeight / 2 - startMaxY) * eased;
+
+    Render.lookAt(this.render, {
+      min: { x: currentMinX, y: currentMinY },
+      max: { x: currentMaxX, y: currentMaxY }
+    });
+  }
+
+  private updateIntroAnimation() {
+    const elapsed = Date.now() - this.introAnimationStartTime;
+    const buildingSpacing = 1000;
+    const targetBuildingX = this.BUILDINGS_START_X + this.targetBuildingIndex * buildingSpacing + 400;
+
+    const worldWidth = 1500;
+    const aspectRatio = this.render.canvas.width / this.render.canvas.height;
+    const worldHeight = worldWidth / aspectRatio;
+
+    const groundY = this.WORLD_HEIGHT - 100;
+    const busterCenterY = groundY - 300;
+
+    if (this.introAnimationPhase === 0) {
+      const pauseDuration = 2000;
+
+      Render.lookAt(this.render, {
+        min: { x: this.BUSTER_START_X - worldWidth / 2, y: busterCenterY - worldHeight / 2 },
+        max: { x: this.BUSTER_START_X + worldWidth / 2, y: busterCenterY + worldHeight / 2 }
+      });
+
+      if (elapsed >= pauseDuration) {
+        this.introAnimationPhase = 1;
+        this.introAnimationStartTime = Date.now();
+      }
+    } else if (this.introAnimationPhase === 1) {
+      const panDuration = 3000;
+      const progress = Math.min(elapsed / panDuration, 1);
+      const eased = this.easeInOutCubic(progress);
+
+      const startX = this.BUSTER_START_X;
+      const endX = targetBuildingX;
+      const currentX = startX + (endX - startX) * eased;
+
+      Render.lookAt(this.render, {
+        min: { x: currentX - worldWidth / 2, y: busterCenterY - worldHeight / 2 },
+        max: { x: currentX + worldWidth / 2, y: busterCenterY + worldHeight / 2 }
+      });
+
+      if (progress >= 1) {
+        this.introAnimationPhase = 2;
+        this.introAnimationStartTime = Date.now();
+      }
+    } else if (this.introAnimationPhase === 2) {
+      const pauseDuration = 500;
+      if (elapsed >= pauseDuration) {
+        this.introAnimationPhase = 3;
+        this.introAnimationStartTime = Date.now();
+      }
+    } else if (this.introAnimationPhase === 3) {
+      const zoomDuration = 2000;
+      const progress = Math.min(elapsed / zoomDuration, 1);
+      const eased = this.easeInOutCubic(progress);
+
+      const buildingWidths = [300, 400, 500, 600, 700, 800];
+      const maxBuildingWidth = Math.max(...buildingWidths);
+      const lastBuildingEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * buildingSpacing + maxBuildingWidth;
+
+      const padding = 500;
+      const finalMinX = this.BUSTER_START_X - padding;
+      const finalMaxX = lastBuildingEnd + padding;
+      const finalViewWidth = finalMaxX - finalMinX;
+      const finalViewHeight = finalViewWidth / aspectRatio;
+      const finalCenterX = (finalMinX + finalMaxX) / 2;
+      const finalCenterY = this.WORLD_HEIGHT / 2;
+
+      const startCenterX = targetBuildingX;
+      const startCenterY = busterCenterY;
+      const startViewWidth = worldWidth;
+      const startViewHeight = worldHeight;
+
+      const currentCenterX = startCenterX + (finalCenterX - startCenterX) * eased;
+      const currentCenterY = startCenterY + (finalCenterY - startCenterY) * eased;
+      const currentViewWidth = startViewWidth + (finalViewWidth - startViewWidth) * eased;
+      const currentViewHeight = startViewHeight + (finalViewHeight - startViewHeight) * eased;
+
+      Render.lookAt(this.render, {
+        min: { x: currentCenterX - currentViewWidth / 2, y: currentCenterY - currentViewHeight / 2 },
+        max: { x: currentCenterX + currentViewWidth / 2, y: currentCenterY + currentViewHeight / 2 }
+      });
+
+      if (progress >= 1) {
+        this.introAnimationPhase = 4;
+        const uiOverlay = document.getElementById('ui-overlay')!;
+        uiOverlay.style.display = 'flex';
+      }
+    }
+  }
+
+  private setupPhysicsEvents() {
+    Events.on(this.engine, 'beforeUpdate', () => {
+      if (this.isFlying && this.buster) {
+        Body.setAngle(this.buster, this.flightAngle);
+        Body.setAngularVelocity(this.buster, 0);
+      }
+
+    });
+
+    Events.on(this.engine, 'collisionStart', (event) => {
+      const pairs = event.pairs;
+
+      for (const pair of pairs) {
+        const bodyA = pair.bodyA;
+        const bodyB = pair.bodyB;
+
+        const isBusterPart = (body: Matter.Body) => {
+          return body.parent === this.buster || body === this.buster;
+        };
+
+        const isBuilding = (body: Matter.Body) => {
+          return this.buildings.includes(body);
+        };
+
+        const isGround = (body: Matter.Body) => {
+          return body === this.ground;
+        };
+
+        const isTargetBrick = (body: Matter.Body) => {
+          return this.targetBuilding.includes(body);
+        };
+
+        const isTargetBrickDynamic = (body: Matter.Body) => {
+          return this.targetBuilding.includes(body) && !body.isStatic;
+        };
+
+        const busterHitTargetBrick =
+          (isBusterPart(bodyA) && isTargetBrick(bodyB)) ||
+          (isBusterPart(bodyB) && isTargetBrick(bodyA));
+
+        if (busterHitTargetBrick && this.buster) {
+          this.hitTargetBuilding = true;
+          const impactPoint = isBusterPart(bodyA) ? bodyB.position : bodyA.position;
+          const busterVelocity = this.buster.velocity;
+
+          this.targetBuilding.forEach(brick => {
+            Body.setStatic(brick, false);
+
+            const dx = brick.position.x - impactPoint.x;
+            const dy = brick.position.y - impactPoint.y;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            const angle = Math.atan2(dy, dx);
+
+            const falloff = Math.max(0.1, 1 - distance / 800);
+            const momentumTransfer = 0.6;
+
+            const velocityX = busterVelocity.x * momentumTransfer * falloff + Math.cos(angle) * 10 * falloff;
+            const velocityY = busterVelocity.y * momentumTransfer * falloff + Math.sin(angle) * 10 * falloff;
+
+            Body.setVelocity(brick, { x: velocityX, y: velocityY });
+          });
+        }
+
+        const isBuildingBrickDynamic = (body: Matter.Body) => {
+          return this.buildingBricks.includes(body) && !body.isStatic;
+        };
+
+        const targetBrickHitBuilding =
+          (isTargetBrickDynamic(bodyA) && isBuilding(bodyB)) ||
+          (isTargetBrickDynamic(bodyB) && isBuilding(bodyA));
+
+        const buildingBrickHitBuilding =
+          (isBuildingBrickDynamic(bodyA) && isBuilding(bodyB)) ||
+          (isBuildingBrickDynamic(bodyB) && isBuilding(bodyA));
+
+        if (targetBrickHitBuilding) {
+          const brick = isTargetBrickDynamic(bodyA) ? bodyA : bodyB;
+          const building = isBuilding(bodyA) ? bodyA : bodyB;
+
+          const velocity = brick.velocity;
+          const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
+
+          if (speed > 2.125) {
+            this.explodeBuilding(building);
+          }
+        }
+
+        if (buildingBrickHitBuilding) {
+          const brick = isBuildingBrickDynamic(bodyA) ? bodyA : bodyB;
+          const building = isBuilding(bodyA) ? bodyA : bodyB;
+
+          const velocity = brick.velocity;
+          const speed = Math.sqrt(velocity.x * velocity.x + velocity.y * velocity.y);
+
+          if (speed > 2.125) {
+            this.explodeBuilding(building);
+          }
+        }
+      }
+
+      if (!this.limbsBroken && this.gameStarted && this.buster) {
+        for (const pair of pairs) {
+          const bodyA = pair.bodyA;
+          const bodyB = pair.bodyB;
+
+          const isBusterPart = (body: Matter.Body) => {
+            return body.parent === this.buster || body === this.buster;
+          };
+
+          const isBuilding = (body: Matter.Body) => {
+            return this.buildings.includes(body);
+          };
+
+          const isTargetBrick = (body: Matter.Body) => {
+            return this.targetBuilding.includes(body);
+          };
+
+          const busterHitBuilding =
+            (isBusterPart(bodyA) && isBuilding(bodyB)) ||
+            (isBusterPart(bodyB) && isBuilding(bodyA));
+
+          const busterHitGround =
+            (isBusterPart(bodyA) && bodyB === this.ground) ||
+            (isBusterPart(bodyB) && bodyA === this.ground);
+
+          const busterHitTargetBrick =
+            (isBusterPart(bodyA) && isTargetBrick(bodyB)) ||
+            (isBusterPart(bodyB) && isTargetBrick(bodyA));
+
+          if (busterHitBuilding || busterHitGround || busterHitTargetBrick) {
+            this.limbsBroken = true;
+
+            this.limbConstraints.forEach(constraint => {
+              Composite.remove(this.engine.world, constraint);
+            });
+
+            this.isFlying = false;
+
+            if (!this.firstImpact) {
+              this.firstImpact = true;
+
+              if (this.failsafeTimeout !== null) {
+                clearTimeout(this.failsafeTimeout);
+                this.failsafeTimeout = null;
+              }
+
+              setTimeout(() => {
+                if (!this.runComplete) {
+                  this.runComplete = true;
+                  this.startOutroAnimation();
+
+                  // If didn't hit target building, show dialog after outro animation completes
+                  if (!this.hitTargetBuilding) {
+                    setTimeout(() => {
+                      const resetModal = document.getElementById('reset-modal')!;
+                      resetModal.style.display = 'flex';
+                    }, 2000);
+                  }
+                }
+              }, 2000);
+            }
+
+            break;
+          }
+        }
+      }
+    });
+  }
+
+  private setupControls() {
+    const startBtn = document.getElementById('start-btn')!;
+
+    startBtn.addEventListener('click', () => {
+      if (!this.gameStarted) {
+        this.startRun();
+        (startBtn as HTMLButtonElement).disabled = true;
+
+        const uiOverlay = document.getElementById('ui-overlay')!;
+        uiOverlay.style.display = 'none';
+      }
+    });
+
+    const resetBtn = document.getElementById('reset-btn')!;
+    resetBtn.addEventListener('click', () => {
+      window.location.reload();
+    });
+  }
+
+  private setupAngleArc() {
+    Events.on(this.render, 'afterRender', () => {
+      if (!this.gameStarted && this.initialViewSet) {
+        const ctx = this.render.context;
+        const canvas = this.render.canvas;
+
+        const arcCenterX = 2700;
+        const arcCenterY = this.WORLD_HEIGHT - 100;
+
+        const bounds = this.render.bounds;
+        const canvasX = ((arcCenterX - bounds.min.x) / (bounds.max.x - bounds.min.x)) * canvas.width;
+        const canvasY = ((arcCenterY - bounds.min.y) / (bounds.max.y - bounds.min.y)) * canvas.height;
+
+        const scale = canvas.width / (bounds.max.x - bounds.min.x);
+        const scaledRadius = this.arcRadius * scale;
+
+        const startAngle = (Math.PI / 180) * (10 - 90);
+        const endAngle = (Math.PI / 180) * (80 - 90);
+
+        ctx.save();
+        ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+        ctx.lineWidth = 6;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.arc(canvasX, canvasY, scaledRadius, startAngle, endAngle);
+        ctx.stroke();
+
+        const handleAngle = -(Math.PI / 180) * this.rampAngle;
+        const handleX = canvasX + Math.cos(handleAngle) * scaledRadius;
+        const handleY = canvasY + Math.sin(handleAngle) * scaledRadius;
+
+        ctx.fillStyle = 'rgba(255, 152, 0, 0.9)';
+        ctx.beginPath();
+        ctx.arc(handleX, handleY, 15, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.restore();
+      }
+    });
+
+    this.canvas.addEventListener('mousedown', (e) => this.handleAngleMouseDown(e));
+    this.canvas.addEventListener('mousemove', (e) => this.handleAngleMouseMove(e));
+    this.canvas.addEventListener('mouseup', () => this.handleAngleMouseUp());
+    this.canvas.addEventListener('mouseleave', () => this.handleAngleMouseUp());
+
+    this.canvas.addEventListener('touchstart', (e) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      const mouseEvent = new MouseEvent('mousedown', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+      });
+      this.handleAngleMouseDown(mouseEvent);
+    });
+
+    this.canvas.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      const touch = e.touches[0];
+      const mouseEvent = new MouseEvent('mousemove', {
+        clientX: touch.clientX,
+        clientY: touch.clientY
+      });
+      this.handleAngleMouseMove(mouseEvent);
+    });
+
+    this.canvas.addEventListener('touchend', () => {
+      this.handleAngleMouseUp();
+    });
+  }
+
+  private handleAngleMouseDown(e: MouseEvent) {
+    if (this.gameStarted || !this.initialViewSet) return;
+
+    const rect = this.canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const arcCenterX = 2700;
+    const arcCenterY = this.WORLD_HEIGHT - 100;
+
+    const bounds = this.render.bounds;
+    const canvas = this.render.canvas;
+    const canvasX = ((arcCenterX - bounds.min.x) / (bounds.max.x - bounds.min.x)) * canvas.width;
+    const canvasY = ((arcCenterY - bounds.min.y) / (bounds.max.y - bounds.min.y)) * canvas.height;
+
+    const scale = canvas.width / (bounds.max.x - bounds.min.x);
+    const scaledRadius = this.arcRadius * scale;
+
+    const handleAngle = -(Math.PI / 180) * this.rampAngle;
+    const handleX = canvasX + Math.cos(handleAngle) * scaledRadius;
+    const handleY = canvasY + Math.sin(handleAngle) * scaledRadius;
+
+    const distance = Math.sqrt(Math.pow(mouseX - handleX, 2) + Math.pow(mouseY - handleY, 2));
+
+    if (distance < 50) {
+      this.isDraggingAngle = true;
+    }
+  }
+
+  private handleAngleMouseMove(e: MouseEvent) {
+    if (!this.isDraggingAngle) return;
+
+    const rect = this.canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    const arcCenterX = 2700;
+    const arcCenterY = this.WORLD_HEIGHT - 100;
+
+    const bounds = this.render.bounds;
+    const canvas = this.render.canvas;
+    const canvasX = ((arcCenterX - bounds.min.x) / (bounds.max.x - bounds.min.x)) * canvas.width;
+    const canvasY = ((arcCenterY - bounds.min.y) / (bounds.max.y - bounds.min.y)) * canvas.height;
+
+    const dx = mouseX - canvasX;
+    const dy = mouseY - canvasY;
+    const angle = Math.atan2(dy, dx);
+
+    let degrees = angle * (180 / Math.PI) + 90;
+
+    degrees = Math.max(10, Math.min(80, degrees));
+
+    // Invert so ramp points toward handle
+    this.rampAngle = Math.round(90 - degrees);
+    this.updateRamp();
+  }
+
+  private handleAngleMouseUp() {
+    this.isDraggingAngle = false;
+  }
+
+  private startSpeedMeter() {
+    this.speedInterval = window.setInterval(() => {
+      if (!this.gameStarted) {
+        if (this.speedIncreasing) {
+          this.speed += 4;
+          if (this.speed >= 100) {
+            this.speed = 100;
+            this.speedIncreasing = false;
+          }
+        } else {
+          this.speed -= 4;
+          if (this.speed <= 0) {
+            this.speed = 0;
+            this.speedIncreasing = true;
+          }
+        }
+
+        const speedBar = document.getElementById('speed-bar')!;
+        const speedValue = document.getElementById('speed-value')!;
+        speedBar.style.width = `${this.speed}%`;
+        speedValue.textContent = `${this.speed}%`;
+      }
+    }, 50);
+  }
+
+  private startRun() {
+    this.gameStarted = true;
+
+    if (this.speedInterval) {
+      clearInterval(this.speedInterval);
+    }
+
+    if (!this.buster || !this.ramp) return;
+
+    this.zoomStartBounds = {
+      minX: this.render.bounds.min.x,
+      maxX: this.render.bounds.max.x,
+      minY: this.render.bounds.min.y,
+      maxY: this.render.bounds.max.y
+    };
+
+    const busterX = this.buster.position.x;
+    const busterY = this.buster.position.y;
+    const viewportWidth = this.render.canvas.width;
+    const viewportHeight = this.render.canvas.height;
+
+    this.zoomEndBounds = {
+      minX: busterX - viewportWidth / 2,
+      maxX: busterX + viewportWidth / 2,
+      minY: busterY - viewportHeight / 2,
+      maxY: busterY + viewportHeight / 2
+    };
+
+    this.isZooming = true;
+    this.zoomStartTime = Date.now();
+
+    setTimeout(() => {
+      this.launchBuster();
+    }, 1000);
+  }
+
+  private launchBuster() {
+    if (!this.buster || !this.ramp) return;
+
+    Body.setStatic(this.buster, false);
+
+    this.busterLimbs.forEach(limb => {
+      Body.setStatic(limb, false);
+    });
+
+    const angleRad = -(this.rampAngle * Math.PI) / 180;
+
+    const rampBackX = this.RAMP_START_X;
+    const groundY = this.WORLD_HEIGHT - 100;
+    const rampBackY = groundY - 60;
+
+    Body.setPosition(this.buster, { x: rampBackX, y: rampBackY });
+
+    const launchSpeed = (this.speed / 100) * 180 + 80;
+
+    const velocityX = launchSpeed * Math.cos(angleRad);
+    const velocityY = launchSpeed * Math.sin(angleRad);
+
+    this.flightAngle = angleRad + (Math.PI / 2);
+    this.isFlying = true;
+
+    Body.setAngle(this.buster, this.flightAngle);
+    Body.setVelocity(this.buster, { x: velocityX, y: velocityY });
+    Body.setAngularVelocity(this.buster, 0);
+
+    this.busterLimbs.forEach(limb => {
+      Body.setVelocity(limb, { x: velocityX, y: velocityY });
+    });
+
+    setTimeout(() => {
+      this.targetBuilding.forEach(brick => {
+        if (!brick.isStatic) {
+          Body.setVelocity(brick, { x: 0, y: 0 });
+          Body.setAngularVelocity(brick, 0);
+          Body.setStatic(brick, true);
+        }
+      });
+
+      this.buildingBricks.forEach(brick => {
+        if (!brick.isStatic) {
+          Body.setVelocity(brick, { x: 0, y: 0 });
+          Body.setAngularVelocity(brick, 0);
+          Body.setStatic(brick, true);
+        }
+      });
+
+      // Show dialog after bricks have settled (only if target was hit)
+      if (!this.runComplete) {
+        this.runComplete = true;
+        this.startOutroAnimation();
+      }
+
+      // Only show dialog if target building was hit (otherwise already shown after 2s)
+      if (this.hitTargetBuilding) {
+        const resetModal = document.getElementById('reset-modal')!;
+        resetModal.style.display = 'flex';
+      }
+    }, 10000);
+
+    this.failsafeTimeout = window.setTimeout(() => {
+      if (!this.firstImpact) {
+        this.limbsBroken = true;
+        this.limbConstraints.forEach(constraint => {
+          Composite.remove(this.engine.world, constraint);
+        });
+        this.isFlying = false;
+        this.firstImpact = true;
+
+        setTimeout(() => {
+          if (!this.runComplete) {
+            this.runComplete = true;
+            this.startOutroAnimation();
+          }
+        }, 2000);
+      }
+    }, 8000);
+  }
+
+  private handleResize() {
+    this.render.canvas.width = window.innerWidth;
+    this.render.canvas.height = window.innerHeight;
+    this.render.options.width = window.innerWidth;
+    this.render.options.height = window.innerHeight;
+    Render.lookAt(this.render, {
+      min: { x: this.render.bounds.min.x, y: this.render.bounds.min.y },
+      max: { x: this.render.bounds.max.x, y: this.render.bounds.max.y }
+    });
+  }
+}
+
+new BoomBoomBuster();
