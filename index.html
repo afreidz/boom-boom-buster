@@ -172,6 +172,61 @@
       background: #45a049;
     }
 
+    #splash {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.88);
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      gap: 32px;
+      z-index: 2000;
+      opacity: 0;
+      transition: opacity 0.6s ease;
+    }
+
+    #splash h1 {
+      color: #ff9800;
+      font-size: clamp(36px, 8vw, 72px);
+      font-weight: 900;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      text-shadow: 0 4px 20px rgba(255, 152, 0, 0.5);
+      margin: 0;
+      text-align: center;
+    }
+
+    #splash p {
+      color: rgba(255,255,255,0.6);
+      font-size: 16px;
+      margin: 0;
+    }
+
+    #play-btn {
+      background: #ff9800;
+      color: white;
+      font-size: 24px;
+      font-weight: 900;
+      padding: 22px 64px;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      transition: all 0.2s;
+      box-shadow: 0 6px 30px rgba(255, 152, 0, 0.4);
+    }
+
+    #play-btn:hover {
+      transform: scale(1.06);
+      background: #e68900;
+    }
+
+    #play-btn:active {
+      transform: scale(0.97);
+    }
+
     @media (orientation: portrait) {
       body::before {
         content: 'Please rotate your device to landscape mode';
@@ -215,6 +270,12 @@
         <div class="speed-value" id="speed-value">50%</div>
       </div>
       <button id="start-btn">START RUN!</button>
+    </div>
+
+    <div id="splash">
+      <h1>Boom Boom<br>Buster</h1>
+      <p>Fearless. Loud. Unstoppable.</p>
+      <button id="play-btn">PLAY</button>
     </div>
 
     <div id="reset-modal">

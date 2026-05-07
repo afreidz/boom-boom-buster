@@ -45,6 +45,8 @@ class BoomBoomBuster {
   private outroStartBounds = { minX: 0, maxX: 0, minY: 0, maxY: 0 };
   private firstImpact: boolean = false;
   private failsafeTimeout: number | null = null;
+  private brickSettleTimeout: number | null = null;
+  private impactTimeout: number | null = null;
   private targetBuildingIndex: number = 0;
   private isDraggingAngle: boolean = false;
   private angleCanvas: HTMLCanvasElement | null = null;
@@ -99,8 +101,8 @@ class BoomBoomBuster {
     Runner.run(this.runner, this.engine);
 
     this.startSpeedMeter();
-    this.startIntroAnimation();
     this.setupAngleArc();
+    this.setupSplash();
 
     window.addEventListener('resize', () => this.handleResize());
   }
@@ -477,6 +479,23 @@ class BoomBoomBuster {
     return t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2;
   }
 
+  private setupSplash() {
+    const splash = document.getElementById('splash')!;
+    const playBtn = document.getElementById('play-btn')!;
+
+    // Fade in on next frame so the CSS transition fires
+    requestAnimationFrame(() => {
+      splash.style.opacity = '1';
+    });
+
+    playBtn.addEventListener('click', () => {
+      document.documentElement.requestFullscreen().catch(() => {});
+      splash.style.opacity = '0';
+      setTimeout(() => { splash.style.display = 'none'; }, 600);
+      this.startIntroAnimation();
+    });
+  }
+
   private startIntroAnimation() {
     this.introAnimationPhase = 0;
     this.introAnimationStartTime = Date.now();
@@ -801,14 +820,14 @@ class BoomBoomBuster {
                 this.failsafeTimeout = null;
               }
 
-              setTimeout(() => {
+              this.impactTimeout = window.setTimeout(() => {
                 if (!this.runComplete) {
                   this.runComplete = true;
                   this.startOutroAnimation();
 
                   // If didn't hit target building, show dialog after outro animation completes
                   if (!this.hitTargetBuilding) {
-                    setTimeout(() => {
+                    this.impactTimeout = window.setTimeout(() => {
                       const resetModal = document.getElementById('reset-modal')!;
                       resetModal.style.display = 'flex';
                     }, 2000);
@@ -838,8 +857,63 @@ class BoomBoomBuster {
 
     const resetBtn = document.getElementById('reset-btn')!;
     resetBtn.addEventListener('click', () => {
-      window.location.reload();
+      this.resetGame();
     });
+  }
+
+  private resetGame() {
+    // Clear pending timers
+    if (this.failsafeTimeout !== null)   { clearTimeout(this.failsafeTimeout);   this.failsafeTimeout = null; }
+    if (this.brickSettleTimeout !== null) { clearTimeout(this.brickSettleTimeout); this.brickSettleTimeout = null; }
+    if (this.impactTimeout !== null)      { clearTimeout(this.impactTimeout);      this.impactTimeout = null; }
+    if (this.speedInterval !== null)      { clearInterval(this.speedInterval);     this.speedInterval = null; }
+
+    // Remove accumulated Matter.js event handlers
+    Events.off(this.engine, 'beforeUpdate');
+    Events.off(this.engine, 'collisionStart');
+    Events.off(this.render, 'afterRender');
+
+    // Clear the physics world
+    Composite.clear(this.engine.world, false);
+
+    // Reset arrays
+    this.buildings = []; this.buildingBricks = []; this.targetBuilding = [];
+    this.busterLimbs = []; this.limbConstraints = [];
+
+    // Reset bodies
+    this.buster = null; this.busterRunBody = null;
+    this.ramp = null; this.rampPlank = null; this.ground = null;
+
+    // Reset all state flags
+    this.gameStarted = false; this.initialViewSet = false;
+    this.isFlying = false; this.flightAngle = 0;
+    this.isZooming = false;
+    this.runComplete = false; this.limbsBroken = false;
+    this.introAnimationPhase = -1;
+    this.outroAnimationStarted = false;
+    this.firstImpact = false; this.hitTargetBuilding = false;
+    this.isRunning = false; this.runPhase = 'backup'; this.runSpeed = 0;
+    this.speed = 50; this.speedIncreasing = true;
+
+    // New random target building
+    const minIndex = Math.floor(this.NUM_BUILDINGS / 2);
+    const maxIndex = this.NUM_BUILDINGS - 2;
+    this.targetBuildingIndex = Math.floor(Math.random() * (maxIndex - minIndex + 1)) + minIndex;
+
+    // Rebuild world and re-register events
+    this.setupLevel();
+    this.setupCamera();
+    this.setupPhysicsEvents();
+    this.startSpeedMeter();
+    this.startIntroAnimation();
+
+    // Reset UI
+    document.getElementById('reset-modal')!.style.display = 'none';
+    document.getElementById('left-panel')!.style.display = 'none';
+    document.getElementById('right-panel')!.style.display = 'none';
+    const startBtn = document.getElementById('start-btn')! as HTMLButtonElement;
+    startBtn.style.display = 'block';
+    startBtn.disabled = false;
   }
 
   private setupAngleArc() {
@@ -1078,7 +1152,8 @@ class BoomBoomBuster {
       Body.setVelocity(limb, { x: velocityX, y: velocityY });
     });
 
-    setTimeout(() => {
+    this.brickSettleTimeout = window.setTimeout(() => {
+      this.brickSettleTimeout = null;
       this.targetBuilding.forEach(brick => {
         if (!brick.isStatic) {
           Body.setVelocity(brick, { x: 0, y: 0 });
@@ -1117,7 +1192,7 @@ class BoomBoomBuster {
         this.isFlying = false;
         this.firstImpact = true;
 
-        setTimeout(() => {
+        this.impactTimeout = window.setTimeout(() => {
           if (!this.runComplete) {
             this.runComplete = true;
             this.startOutroAnimation();
