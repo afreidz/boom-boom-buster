@@ -38,6 +38,14 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js');
 }
 
+// Mute button
+const muteBtn = document.getElementById('mute-btn')!;
+muteBtn.addEventListener('click', () => {
+  const muted = !game.sound.mute;
+  game.sound.mute = muted;
+  muteBtn.textContent = muted ? '🔇' : '🔊';
+});
+
 window.addEventListener('resize', () => {
   game.scale.resize(window.innerWidth, window.innerHeight);
 });

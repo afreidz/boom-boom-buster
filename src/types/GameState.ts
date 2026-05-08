@@ -73,4 +73,7 @@ export const KEY = {
   SFX_WIND:    'sfxWind',
   SFX_CRASH:   ['sfxCrash1', 'sfxCrash2', 'sfxCrash3'] as const,
   SFX_SCREAM:  ['sfxScream1', 'sfxScream2', 'sfxScream3', 'sfxScream4'] as const,
+  SFX_AMBIENT:    ['sfxBirds', 'sfxConstruction', 'sfxTraffic'] as const,
+  SFX_CHEERING:   'sfxCheering',
+  SFX_EXPLOSION:  'sfxExplosion',
 } as const;

@@ -179,6 +179,28 @@
       background: #45a049;
     }
 
+    #mute-btn {
+      position: fixed;
+      top: 14px;
+      right: 14px;
+      width: 44px;
+      height: 44px;
+      padding: 0;
+      font-size: 22px;
+      background: rgba(0, 0, 0, 0.55);
+      border: none;
+      border-radius: 10px;
+      cursor: pointer;
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 500;
+      transition: background 0.15s;
+    }
+
+    #mute-btn:hover { background: rgba(0, 0, 0, 0.8); }
+
     #splash {
       position: fixed;
       inset: 0;
@@ -278,6 +300,8 @@
       </div>
       <button id="start-btn">START RUN!</button>
     </div>
+
+    <button id="mute-btn" title="Toggle mute">🔊</button>
 
     <div id="splash">
       <h1>Boom Boom<br>Buster</h1>

@@ -26,6 +26,11 @@ export class BootScene extends Phaser.Scene {
     this.load.audio(KEY.SFX_SCREAM[1], '/sounds/effects/scream2.mp3');
     this.load.audio(KEY.SFX_SCREAM[2], '/sounds/effects/scream3.mp3');
     this.load.audio(KEY.SFX_SCREAM[3], '/sounds/effects/scream4.mp3');
+    this.load.audio(KEY.SFX_AMBIENT[0], '/sounds/effects/birds.mp3');
+    this.load.audio(KEY.SFX_AMBIENT[1], '/sounds/effects/construction.mp3');
+    this.load.audio(KEY.SFX_AMBIENT[2], '/sounds/effects/traffic.mp3');
+    this.load.audio(KEY.SFX_CHEERING,  '/sounds/effects/cheering.mp3');
+    this.load.audio(KEY.SFX_EXPLOSION, '/sounds/effects/explosion.mp3');
   }
 
   create(): void {

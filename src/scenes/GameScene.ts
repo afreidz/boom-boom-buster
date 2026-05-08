@@ -36,20 +36,25 @@ export class GameScene extends Phaser.Scene {
   private speedInterval: number | null = null;
   private followBuster = false;
   private theme: Phaser.Sound.BaseSound | null = null;
+  private ambientSounds: Phaser.Sound.BaseSound[] = [];
   private sfxRunning!: Phaser.Sound.BaseSound;
   private sfxWoosh!:   Phaser.Sound.BaseSound;
   private sfxLaunch!:  Phaser.Sound.BaseSound;
   private sfxWind!:    Phaser.Sound.BaseSound;
-  private sfxCrashes!: Phaser.Sound.BaseSound[];
-  private sfxScreams!: Phaser.Sound.BaseSound[];
+  private sfxCrashes!:  Phaser.Sound.BaseSound[];
+  private sfxScreams!:  Phaser.Sound.BaseSound[];
+  private sfxCheering!:   Phaser.Sound.BaseSound;
+  private sfxExplosions!: Phaser.Sound.BaseSound[]; // pool for simultaneous playback
+  private explosionIdx = 0;
 
   private busterSprite!: Phaser.GameObjects.Sprite;
   private headSprite!:   Phaser.GameObjects.Image;
 
   constructor() { super({ key: SCENE.GAME }); }
 
-  init(data: { theme?: Phaser.Sound.BaseSound }): void {
-    if (data?.theme) this.theme = data.theme;
+  init(data: { theme?: Phaser.Sound.BaseSound; ambient?: Phaser.Sound.BaseSound[] }): void {
+    if (data?.theme)   this.theme        = data.theme;
+    if (data?.ambient) this.ambientSounds = data.ambient;
     this.rampAngle   = RAMP_DEFAULT_ANGLE;
     this.speed       = 50;
     this.speedDir    = 1;
@@ -105,14 +110,22 @@ export class GameScene extends Phaser.Scene {
     this.sfxWoosh   = this.sound.add(KEY.SFX_WOOSH);
     this.sfxLaunch  = this.sound.add(KEY.SFX_LAUNCH);
     this.sfxWind    = this.sound.add(KEY.SFX_WIND, { loop: true });
-    this.sfxCrashes = KEY.SFX_CRASH.map(k => this.sound.add(k));
-    this.sfxScreams = KEY.SFX_SCREAM.map(k => this.sound.add(k));
+    this.sfxCrashes   = KEY.SFX_CRASH.map(k => this.sound.add(k));
+    this.sfxScreams   = KEY.SFX_SCREAM.map(k => this.sound.add(k));
+    this.sfxCheering  = this.sound.add(KEY.SFX_CHEERING, { loop: true, volume: 0 });
+    this.sfxExplosions = Array.from({ length: 6 }, () => this.sound.add(KEY.SFX_EXPLOSION));
 
     this.setupPhysicsEvents();
     this.setupUI();
     this.startSpeedMeter();
 
     this.camCtrl.playIntro(this.targetIndex, () => this.onIntroComplete());
+
+    // Start ambient scheduler once, 10s after first game load
+    if (!(this.game as any)._ambientStarted && this.ambientSounds.length) {
+      (this.game as any)._ambientStarted = true;
+      this.time.delayedCall(10000, () => this.playNextAmbient());
+    }
   }
 
   private setupUI(): void {
@@ -141,7 +154,16 @@ export class GameScene extends Phaser.Scene {
     resetBtn.addEventListener('click', () => {
       document.getElementById('reset-modal')!.style.display = 'none';
       if (this.arcWidget) this.arcWidget.destroy();
-      this.scene.restart({ theme: this.theme });
+      // Fade out cheering before restart
+      const cheer = this.sfxCheering as Phaser.Sound.WebAudioSound;
+      if (cheer.isPlaying) {
+        this.tweens.add({
+          targets: cheer, volume: 0, duration: 1500, ease: 'Linear',
+          onComplete: () => { cheer.stop(); this.scene.restart({ theme: this.theme, ambient: this.ambientSounds }); },
+        });
+      } else {
+        this.scene.restart({ theme: this.theme, ambient: this.ambientSounds });
+      }
     }, { once: true });
   }
 
@@ -217,6 +239,7 @@ export class GameScene extends Phaser.Scene {
         if (hit) {
           this.hitTarget = true;
           this.followBuster = false;
+          this.playExplosion();
           activateTargetBuilding(this.matter, this.buildings);
 
           // Zoom out to show the surrounding damage area
@@ -251,6 +274,7 @@ export class GameScene extends Phaser.Scene {
         const building = isSolid(a) ? a : b;
         if (shouldChainExplode(brick)) {
           explodeBuilding(this.matter, building, this.buildings.solidBodies, this.buildings.secondaryBricks);
+          this.playExplosion();
         }
       }
 
@@ -313,11 +337,48 @@ export class GameScene extends Phaser.Scene {
 
   private showResetModal(): void {
     this.stopAllEffects();
+    if (this.hitTarget) {
+      const cheer = this.sfxCheering as Phaser.Sound.WebAudioSound;
+      cheer.setVolume(0);
+      cheer.play();
+      this.tweens.add({ targets: cheer, volume: 0.7, duration: 2000, ease: 'Linear' });
+    }
     document.getElementById('reset-modal')!.style.display = 'flex';
+  }
+
+  private playNextAmbient(): void {
+    if (!this.ambientSounds.length) return;
+    const pick = this.ambientSounds[
+      Phaser.Math.Between(0, this.ambientSounds.length - 1)
+    ] as Phaser.Sound.WebAudioSound;
+
+    pick.setVolume(0);
+    pick.play();
+
+    // Fade in to 50%
+    this.tweens.add({ targets: pick, volume: 0.5, duration: 3000, ease: 'Linear' });
+
+    // Fade out 3s before end, then schedule next
+    pick.once('complete', () => {
+      this.tweens.add({
+        targets: pick, volume: 0, duration: 2000, ease: 'Linear',
+        onComplete: () => {
+          const delay = Phaser.Math.Between(15000, 35000);
+          this.time.delayedCall(delay, () => this.playNextAmbient());
+        },
+      });
+    });
+  }
+
+  private playExplosion(): void {
+    const snd = this.sfxExplosions[this.explosionIdx % this.sfxExplosions.length];
+    this.explosionIdx++;
+    (snd as Phaser.Sound.WebAudioSound).play();
   }
 
   private stopAllEffects(): void {
     [this.sfxRunning, this.sfxWoosh, this.sfxLaunch, this.sfxWind].forEach(s => s?.stop());
+    // Ambient sounds intentionally NOT stopped — they persist across runs and idle states
   }
 
   private playImpactSounds(): void {
