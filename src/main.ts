@@ -138,10 +138,8 @@ class BoomBoomBuster {
 
   private setupBackground() {
     const groundY = this.WORLD_HEIGHT - 100;
-    const darkAltitude = -8000; // world Y where sky reaches its darkest
-
+    const darkAltitude = -8000;
     const skyColor = (worldY: number) => {
-      // t=0 at groundY (lightest), t=1 at darkAltitude (darkest)
       const t = Math.max(0, Math.min(1, (groundY - worldY) / (groundY - darkAltitude)));
       const r = Math.round(135 - t * (135 - 30));
       const g = Math.round(206 - t * (206 - 50));
@@ -159,7 +157,7 @@ class BoomBoomBuster {
       ctx.save();
       ctx.globalCompositeOperation = 'destination-over';
 
-      // Trees
+      // Trees behind buildings
       const gY = (groundY - bounds.min.y) * scaleY;
       for (const tree of this.trees) {
         const tx = (tree.x - bounds.min.x) * scaleX;
@@ -167,12 +165,8 @@ class BoomBoomBuster {
         const trunkPx = tree.trunkH * scaleY;
         const canopyPx = tree.canopyR * scaleX;
         const trunkW = Math.max(2, 18 * scaleX);
-
-        // Trunk
         ctx.fillStyle = '#5D4037';
         ctx.fillRect(tx - trunkW / 2, gY - trunkPx, trunkW, trunkPx);
-
-        // Canopy layers for a fuller look
         ctx.fillStyle = tree.color;
         ctx.beginPath();
         ctx.arc(tx, gY - trunkPx, canopyPx, 0, Math.PI * 2);
@@ -187,7 +181,7 @@ class BoomBoomBuster {
       }
 
       // Clouds
-      ctx.fillStyle = 'rgba(255,255,255,0.8)';
+      ctx.fillStyle = 'rgba(255,255,255,0.75)';
       for (const cloud of this.clouds) {
         const sx = (cloud.x - bounds.min.x) * scaleX;
         const sy = (cloud.y - bounds.min.y) * scaleY;
@@ -200,7 +194,7 @@ class BoomBoomBuster {
         ctx.fill();
       }
 
-      // Sky gradient — lightest at ground level, darkening upward over a long range
+      // Sky gradient
       const groundScreenY = (groundY - bounds.min.y) * scaleY;
       const grad = ctx.createLinearGradient(0, 0, 0, canvas.height);
       const groundStop = Math.max(0, Math.min(1, groundScreenY / canvas.height));
@@ -987,6 +981,7 @@ class BoomBoomBuster {
     // Remove accumulated Matter.js event handlers
     Events.off(this.engine, 'beforeUpdate');
     Events.off(this.engine, 'collisionStart');
+    Events.off(this.render, 'beforeRender');
     Events.off(this.render, 'afterRender');
 
     // Clear the physics world
