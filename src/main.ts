@@ -52,6 +52,7 @@ class BoomBoomBuster {
   private angleCanvas: HTMLCanvasElement | null = null;
   private busterIcon: HTMLImageElement | null = null;
   private clouds: Array<{ x: number; y: number; r: number }> = [];
+  private trees: Array<{ x: number; trunkH: number; canopyR: number; color: string }> = [];
   private hitTargetBuilding: boolean = false;
   private isRunning: boolean = false;
   private runPhase: 'backup' | 'forward' | 'ramp' = 'backup';
@@ -72,7 +73,7 @@ class BoomBoomBuster {
       gravity: { x: 0, y: 1, scale: 0.004 }
     });
 
-    this.engine.timing.timeScale = 0.7;
+    this.engine.timing.timeScale = 0.9;
 
     const viewportWidth = window.innerWidth;
     const viewportHeight = window.innerHeight;
@@ -98,11 +99,22 @@ class BoomBoomBuster {
     img.src = '/buster-icon.png';
     img.onload = () => { this.busterIcon = img; };
 
-    // Clouds across the full playing field width (buildings end at ~35100)
-    const cloudFieldEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * 1000 + 800 + 2000;
+    // Trees scattered across the playing field
+    const fieldEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * 1000 + 800;
+    const treeColors = ['#1B5E20', '#2E7D32', '#33691E', '#388E3C', '#1A3A1A'];
+    for (let i = 0; i < 60; i++) {
+      this.trees.push({
+        x: Math.random() * fieldEnd,
+        trunkH: 100 + Math.random() * 250,
+        canopyR: 80 + Math.random() * 140,
+        color: treeColors[Math.floor(Math.random() * treeColors.length)]
+      });
+    }
+
+    // Clouds across the full playing field width
     for (let i = 0; i < 50; i++) {
       this.clouds.push({
-        x: Math.random() * cloudFieldEnd,
+        x: Math.random() * (fieldEnd + 2000),
         y: -1500 - Math.random() * 2000,
         r: 100 + Math.random() * 200
       });
@@ -146,6 +158,33 @@ class BoomBoomBuster {
 
       ctx.save();
       ctx.globalCompositeOperation = 'destination-over';
+
+      // Trees
+      const gY = (groundY - bounds.min.y) * scaleY;
+      for (const tree of this.trees) {
+        const tx = (tree.x - bounds.min.x) * scaleX;
+        if (tx < -tree.canopyR * scaleX * 2 || tx > canvas.width + tree.canopyR * scaleX * 2) continue;
+        const trunkPx = tree.trunkH * scaleY;
+        const canopyPx = tree.canopyR * scaleX;
+        const trunkW = Math.max(2, 18 * scaleX);
+
+        // Trunk
+        ctx.fillStyle = '#5D4037';
+        ctx.fillRect(tx - trunkW / 2, gY - trunkPx, trunkW, trunkPx);
+
+        // Canopy layers for a fuller look
+        ctx.fillStyle = tree.color;
+        ctx.beginPath();
+        ctx.arc(tx, gY - trunkPx, canopyPx, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = tree.color + 'cc';
+        ctx.beginPath();
+        ctx.arc(tx - canopyPx * 0.3, gY - trunkPx - canopyPx * 0.4, canopyPx * 0.65, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(tx + canopyPx * 0.3, gY - trunkPx - canopyPx * 0.3, canopyPx * 0.6, 0, Math.PI * 2);
+        ctx.fill();
+      }
 
       // Clouds
       ctx.fillStyle = 'rgba(255,255,255,0.8)';
@@ -598,6 +637,9 @@ class BoomBoomBuster {
     });
 
     playBtn.addEventListener('click', () => {
+      // Lock orientation to landscape where supported (Chrome/Android)
+      const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
+      if (orientation?.lock) orientation.lock('landscape').catch(() => {});
       splash.style.opacity = '0';
       setTimeout(() => { splash.style.display = 'none'; }, 600);
       this.startIntroAnimation();
@@ -661,79 +703,48 @@ class BoomBoomBuster {
     const buildingSpacing = 1000;
     const targetBuildingX = this.BUILDINGS_START_X + this.targetBuildingIndex * buildingSpacing + 400;
 
-    const worldWidth = 1500;
+    const tightWidth = 1500;
     const aspectRatio = this.render.canvas.width / this.render.canvas.height;
-    const worldHeight = worldWidth / aspectRatio;
-
+    const tightHeight = tightWidth / aspectRatio;
     const groundY = this.WORLD_HEIGHT - 100;
-    const busterCenterY = groundY - 300;
+    const targetCenterY = groundY - 400;
+
+    const buildingWidths = [300, 400, 500, 600, 700, 800];
+    const maxBuildingWidth = Math.max(...buildingWidths);
+    const lastBuildingEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * buildingSpacing + maxBuildingWidth;
+    const padding = 500;
+    const finalMinX = this.BUSTER_START_X - padding;
+    const finalMaxX = lastBuildingEnd + padding;
+    const finalViewWidth = finalMaxX - finalMinX;
+    const finalViewHeight = finalViewWidth / aspectRatio;
+    const finalCenterX = (finalMinX + finalMaxX) / 2;
+    const finalCenterY = this.WORLD_HEIGHT / 2;
 
     if (this.introAnimationPhase === 0) {
-      const pauseDuration = 2000;
-
+      // Hold tight on target building briefly
       Render.lookAt(this.render, {
-        min: { x: this.BUSTER_START_X - worldWidth / 2, y: busterCenterY - worldHeight / 2 },
-        max: { x: this.BUSTER_START_X + worldWidth / 2, y: busterCenterY + worldHeight / 2 }
+        min: { x: targetBuildingX - tightWidth / 2, y: targetCenterY - tightHeight / 2 },
+        max: { x: targetBuildingX + tightWidth / 2, y: targetCenterY + tightHeight / 2 }
       });
 
-      if (elapsed >= pauseDuration) {
+      if (elapsed >= 800) {
         this.introAnimationPhase = 1;
         this.introAnimationStartTime = Date.now();
       }
     } else if (this.introAnimationPhase === 1) {
-      const panDuration = 3000;
-      const progress = Math.min(elapsed / panDuration, 1);
-      const eased = this.easeInOutCubic(progress);
-
-      const startX = this.BUSTER_START_X;
-      const endX = targetBuildingX;
-      const currentX = startX + (endX - startX) * eased;
-
-      Render.lookAt(this.render, {
-        min: { x: currentX - worldWidth / 2, y: busterCenterY - worldHeight / 2 },
-        max: { x: currentX + worldWidth / 2, y: busterCenterY + worldHeight / 2 }
-      });
-
-      if (progress >= 1) {
-        this.introAnimationPhase = 2;
-        this.introAnimationStartTime = Date.now();
-      }
-    } else if (this.introAnimationPhase === 2) {
-      const pauseDuration = 500;
-      if (elapsed >= pauseDuration) {
-        this.introAnimationPhase = 3;
-        this.introAnimationStartTime = Date.now();
-      }
-    } else if (this.introAnimationPhase === 3) {
-      const zoomDuration = 2000;
+      // Zoom out to full playing field
+      const zoomDuration = 2500;
       const progress = Math.min(elapsed / zoomDuration, 1);
       const eased = this.easeInOutCubic(progress);
 
-      const buildingWidths = [300, 400, 500, 600, 700, 800];
-      const maxBuildingWidth = Math.max(...buildingWidths);
-      const lastBuildingEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * buildingSpacing + maxBuildingWidth;
-
-      const padding = 500;
-      const finalMinX = this.BUSTER_START_X - padding;
-      const finalMaxX = lastBuildingEnd + padding;
-      const finalViewWidth = finalMaxX - finalMinX;
-      const finalViewHeight = finalViewWidth / aspectRatio;
-      const finalCenterX = (finalMinX + finalMaxX) / 2;
-      const finalCenterY = this.WORLD_HEIGHT / 2;
-
-      const startCenterX = targetBuildingX;
-      const startCenterY = busterCenterY;
-      const startViewWidth = worldWidth;
-      const startViewHeight = worldHeight;
-
-      const currentCenterX = startCenterX + (finalCenterX - startCenterX) * eased;
-      const currentCenterY = startCenterY + (finalCenterY - startCenterY) * eased;
-      const currentViewWidth = startViewWidth + (finalViewWidth - startViewWidth) * eased;
-      const currentViewHeight = startViewHeight + (finalViewHeight - startViewHeight) * eased;
+      const currentCenterX = targetBuildingX + (finalCenterX - targetBuildingX) * eased;
+      const currentCenterY = targetCenterY  + (finalCenterY  - targetCenterY)  * eased;
+      const currentViewWidth  = tightWidth  + (finalViewWidth  - tightWidth)  * eased;
+      const currentViewHeight = tightHeight + (finalViewHeight - tightHeight) * eased;
 
       Render.lookAt(this.render, {
-        min: { x: currentCenterX - currentViewWidth / 2, y: currentCenterY - currentViewHeight / 2 },
-        max: { x: currentCenterX + currentViewWidth / 2, y: currentCenterY + currentViewHeight / 2 }
+        min: { x: currentCenterX - currentViewWidth / 2,  y: currentCenterY - currentViewHeight / 2 },
+        max: { x: currentCenterX + currentViewWidth / 2,  y: currentCenterY + currentViewHeight / 2 }
       });
 
       if (progress >= 1) {
@@ -1010,6 +1021,7 @@ class BoomBoomBuster {
 
     // Rebuild world and re-register events
     this.setupLevel();
+    this.setupBackground();
     this.setupCamera();
     this.setupPhysicsEvents();
     this.startSpeedMeter();
@@ -1244,7 +1256,7 @@ class BoomBoomBuster {
     Composite.add(this.engine.world, [this.busterLimbs[0], this.busterLimbs[1], this.busterLimbs[2], this.busterLimbs[3], this.buster]);
     Composite.add(this.engine.world, this.limbConstraints);
 
-    const launchSpeed = (this.speed / 100) * 180 + 80;
+    const launchSpeed = (this.speed / 100) * 144 + 64;
 
     const velocityX = launchSpeed * Math.cos(angleRad);
     const velocityY = launchSpeed * Math.sin(angleRad);
