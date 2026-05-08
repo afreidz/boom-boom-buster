@@ -637,9 +637,6 @@ class BoomBoomBuster {
     });
 
     playBtn.addEventListener('click', () => {
-      // Lock orientation to landscape where supported (Chrome/Android)
-      const orientation = screen.orientation as ScreenOrientation & { lock?: (o: string) => Promise<void> };
-      if (orientation?.lock) orientation.lock('landscape').catch(() => {});
       splash.style.opacity = '0';
       setTimeout(() => { splash.style.display = 'none'; }, 600);
       this.startIntroAnimation();
