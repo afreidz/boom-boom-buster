@@ -199,6 +199,7 @@ export class GameScene extends Phaser.Scene {
 
   private handleCollisions(pairs: MatterJS.IPair[]): void {
     const isGround      = (b: MatterJS.BodyType) => b === this.ground;
+    const isRamp        = (b: MatterJS.BodyType) => (b as any).label === 'ramp' || (b as any).label === 'rampPlank';
     const isSolid       = (b: MatterJS.BodyType) => this.buildings.solidBodies.includes(b);
     const isTargetBody  = (b: MatterJS.BodyType) => b === this.buildings.targetBody;
     const isTargetBrick = (b: MatterJS.BodyType) => this.buildings.targetBricks.includes(b);
@@ -255,8 +256,8 @@ export class GameScene extends Phaser.Scene {
 
       // First impact
       if (!this.limbsBroken) {
-        const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isTargetBody(b) || isTargetBrick(b)))
-                  || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isTargetBody(a) || isTargetBrick(a)));
+        const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isRamp(b) || isTargetBody(b) || isTargetBrick(b)))
+                  || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isRamp(a) || isTargetBody(a) || isTargetBrick(a)));
         if (bHit) {
           this.limbsBroken = true;
           this.buster.stopFlight();
@@ -281,8 +282,8 @@ export class GameScene extends Phaser.Scene {
       if (this.limbsBroken && this.firstImpact && !this.runComplete) {
         const now = Date.now();
         if (now - this.lastImpactMs > 800) {
-          const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isTargetBody(b) || isTargetBrick(b)))
-                    || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isTargetBody(a) || isTargetBrick(a)));
+          const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isRamp(b) || isTargetBody(b) || isTargetBrick(b)))
+                    || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isRamp(a) || isTargetBody(a) || isTargetBrick(a)));
           if (bHit) { this.lastImpactMs = now; this.playImpactSounds(); }
         }
       }
@@ -294,7 +295,8 @@ export class GameScene extends Phaser.Scene {
     settleBricks(this.matter, this.buildings.targetBricks);
     settleBricks(this.matter, this.buildings.secondaryBricks);
     if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2); }
-    if (this.hitTarget) this.showResetModal();
+    // Always show reset modal after bricks settle
+    this.time.delayedCall(2500, () => this.showResetModal());
   }
 
   private triggerFailsafe(): void {
@@ -303,7 +305,10 @@ export class GameScene extends Phaser.Scene {
     this.buster.stopFlight();
     if (this.buster.ragdoll) breakLimbs(this.matter, this.buster.ragdoll);
     this.firstImpact = true;
-    this.time.delayedCall(2000, () => { if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2); } });
+    this.time.delayedCall(2000, () => {
+      if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2); }
+      this.time.delayedCall(2500, () => this.showResetModal());
+    });
   }
 
   private showResetModal(): void {

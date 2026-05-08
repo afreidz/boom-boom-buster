@@ -70,6 +70,22 @@ export function createBackground(
     skyGfx.fillRect(-2000, topY, fieldEnd + 6000, bandH + 1);
   }
 
+  // --- Moon ---
+  // Positioned 25% from the left of the field, just above the gradient boundary
+  const moonX = Math.floor(-2000 + (fieldEnd + 8000) * 0.22);
+  const moonY = DARK_Y - 8000;
+  const moonR = 500;
+  const moonGfx = scene.add.graphics();
+  moonGfx.setDepth(-198); // above stars (-199), below clouds (-100)
+
+  // Moon body — warm white
+  moonGfx.fillStyle(0xFFF8DC, 1.0);
+  moonGfx.fillCircle(moonX, moonY, moonR);
+
+  // Crescent shadow: overlay a circle in the sky's darkest colour, slightly offset
+  moonGfx.fillStyle(darkestColor, 1.0);
+  moonGfx.fillCircle(moonX + Math.round(moonR * 0.38), moonY - Math.round(moonR * 0.08), Math.round(moonR * 0.88));
+
   // --- Clouds ---
   const cloudGfx = scene.add.graphics();
   cloudGfx.setDepth(-100);
