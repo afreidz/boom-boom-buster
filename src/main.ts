@@ -58,6 +58,17 @@ class BoomBoomBuster {
   private runPhase: 'backup' | 'forward' | 'ramp' = 'backup';
   private runSpeed: number = 0;
   private busterRunBody: Matter.Body | null = null;
+  private sounds: {
+    theme: HTMLAudioElement;
+    running: HTMLAudioElement;
+    woosh: HTMLAudioElement;
+    launch: HTMLAudioElement;
+    wind: HTMLAudioElement;
+    crashes: HTMLAudioElement[];
+    screams: HTMLAudioElement[];
+  } | null = null;
+  private lastRunPhase: 'backup' | 'forward' | 'ramp' | null = null;
+  private lastImpactSoundTime: number = 0;
 
   private readonly WORLD_WIDTH = 18000;
   private readonly WORLD_HEIGHT = 1000;
@@ -134,6 +145,47 @@ class BoomBoomBuster {
     this.setupSplash();
 
     window.addEventListener('resize', () => this.handleResize());
+  }
+
+  private initAudio() {
+    const a = (src: string, loop = false) => {
+      const el = new Audio(src);
+      el.preload = 'auto';
+      el.loop = loop;
+      return el;
+    };
+    this.sounds = {
+      theme:   a('/sounds/music/theme.mp3', true),
+      running: a('/sounds/effects/running.mp3', true),
+      woosh:   a('/sounds/effects/woosh.mp3'),
+      launch:  a('/sounds/effects/launch.mp3'),
+      wind:    a('/sounds/effects/wind.mp3', true),
+      crashes: [1, 2, 3].map(n => a(`/sounds/effects/crash${n}.mp3`)),
+      screams: ['', '2', '3', '4'].map(n => a(`/sounds/effects/scream${n}.mp3`)),
+    };
+    this.sounds.theme.play().catch(() => {});
+  }
+
+  private stopAllEffects(includeLaunch = true) {
+    if (!this.sounds) return;
+    const s = this.sounds;
+    const toStop = includeLaunch
+      ? [s.running, s.woosh, s.launch, s.wind]
+      : [s.running, s.woosh, s.wind];
+    toStop.forEach(el => { el.pause(); el.currentTime = 0; });
+  }
+
+  private playEffect(el: HTMLAudioElement) {
+    el.currentTime = 0;
+    el.play().catch(() => {});
+  }
+
+  private playImpactSounds() {
+    if (!this.sounds) return;
+    const randomCrash = this.sounds.crashes[Math.floor(Math.random() * this.sounds.crashes.length)];
+    const randomScream = this.sounds.screams[Math.floor(Math.random() * this.sounds.screams.length)];
+    this.playEffect(randomCrash);
+    this.playEffect(randomScream);
   }
 
   private setupBackground() {
@@ -631,6 +683,7 @@ class BoomBoomBuster {
     });
 
     playBtn.addEventListener('click', () => {
+      this.initAudio();
       splash.style.opacity = '0';
       setTimeout(() => { splash.style.display = 'none'; }, 600);
       this.startIntroAnimation();
@@ -749,6 +802,19 @@ class BoomBoomBuster {
   private setupPhysicsEvents() {
     Events.on(this.engine, 'beforeUpdate', () => {
       if (this.isRunning && this.busterRunBody) {
+        // Trigger sounds on phase change
+        if (this.runPhase !== this.lastRunPhase) {
+          if (this.runPhase === 'backup') {
+            if (this.sounds) { this.sounds.woosh.pause(); this.sounds.running.currentTime = 0; this.sounds.running.play().catch(() => {}); }
+          } else if (this.runPhase === 'forward') {
+            if (this.sounds) { this.sounds.running.pause(); this.sounds.running.currentTime = 0; this.playEffect(this.sounds.woosh); }
+          } else if (this.runPhase === 'ramp') {
+            if (this.sounds) { this.sounds.running.pause(); this.sounds.running.currentTime = 0; }
+            if (this.sounds) { this.playEffect(this.sounds.launch); }
+          }
+          this.lastRunPhase = this.runPhase;
+        }
+
         const pos = this.busterRunBody.position;
         const groundY = this.WORLD_HEIGHT - 100;
         const busterGroundY = groundY - 60;
@@ -922,6 +988,10 @@ class BoomBoomBuster {
 
             this.isFlying = false;
 
+            // Stop wind and play impact sounds
+            if (this.sounds) { this.sounds.wind.pause(); this.sounds.wind.currentTime = 0; }
+            this.playImpactSounds();
+
             if (!this.firstImpact) {
               this.firstImpact = true;
 
@@ -950,6 +1020,26 @@ class BoomBoomBuster {
           }
         }
       }
+
+      // Play impact sounds for subsequent collisions after first impact
+      if (this.limbsBroken && this.buster && this.firstImpact) {
+        const now = Date.now();
+        if (now - this.lastImpactSoundTime > 400) {
+          for (const pair of pairs) {
+            const bodyA = pair.bodyA;
+            const bodyB = pair.bodyB;
+            const isBusterPart = (b: Matter.Body) => b.parent === this.buster || b === this.buster;
+            const busterHit =
+              (isBusterPart(bodyA) && (this.buildings.includes(bodyB) || bodyB === this.ground || this.targetBuilding.includes(bodyB))) ||
+              (isBusterPart(bodyB) && (this.buildings.includes(bodyA) || bodyA === this.ground || this.targetBuilding.includes(bodyA)));
+            if (busterHit) {
+              this.lastImpactSoundTime = now;
+              this.playImpactSounds();
+              break;
+            }
+          }
+        }
+      }
     });
   }
 
@@ -972,6 +1062,11 @@ class BoomBoomBuster {
   }
 
   private resetGame() {
+    // Reset sounds
+    this.stopAllEffects();
+    if (this.sounds) { this.sounds.wind.pause(); this.sounds.wind.currentTime = 0; }
+    this.lastRunPhase = null;
+
     // Clear pending timers
     if (this.failsafeTimeout !== null)   { clearTimeout(this.failsafeTimeout);   this.failsafeTimeout = null; }
     if (this.brickSettleTimeout !== null) { clearTimeout(this.brickSettleTimeout); this.brickSettleTimeout = null; }
@@ -1255,6 +1350,8 @@ class BoomBoomBuster {
 
     this.flightAngle = angleRad + (Math.PI / 2);
     this.isFlying = true;
+    this.stopAllEffects(false); // keep launch playing through
+    if (this.sounds) this.sounds.wind.play().catch(() => {});
 
     Body.setAngle(this.buster, this.flightAngle);
     Body.setVelocity(this.buster, { x: velocityX, y: velocityY });
