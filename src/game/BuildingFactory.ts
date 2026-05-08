@@ -8,9 +8,10 @@ import {
 } from '../types/GameState';
 
 export interface BuildingData {
-  solidBodies: MatterJS.BodyType[];
-  targetBricks: MatterJS.BodyType[];
-  secondaryBricks: MatterJS.BodyType[];
+  solidBodies: MatterJS.BodyType[];   // all static buildings incl. target until hit
+  targetBody: MatterJS.BodyType | null; // the single target building solid body
+  targetBricks: MatterJS.BodyType[];  // dynamic bricks after target is hit
+  secondaryBricks: MatterJS.BodyType[]; // bricks from chain-exploded buildings
   targetIndex: number;
 }
 
@@ -51,9 +52,10 @@ function createBrickBuilding(
 }
 
 export function createBuildings(matter: Phaser.Physics.Matter.MatterPhysics, targetIndex: number): BuildingData {
-  const solidBodies: MatterJS.BodyType[]    = [];
-  const targetBricks: MatterJS.BodyType[]   = [];
+  const solidBodies: MatterJS.BodyType[]     = [];
+  const targetBricks: MatterJS.BodyType[]    = [];
   const secondaryBricks: MatterJS.BodyType[] = [];
+  let   targetBody: MatterJS.BodyType | null = null;
 
   for (let i = 0; i < NUM_BUILDINGS; i++) {
     const x       = BUILDINGS_START_X + i * BUILDING_SPACING;
@@ -61,52 +63,120 @@ export function createBuildings(matter: Phaser.Physics.Matter.MatterPhysics, tar
     const width    = randomFrom(BUILDING_WIDTHS);
     const height   = isTarget ? TARGET_HEIGHT : randomFrom(BUILDING_HEIGHTS);
 
-    if (isTarget) {
-      createBrickBuilding(matter, x, width, height, true, targetBricks, secondaryBricks);
-    } else {
-      const body = matter.bodies.rectangle(x + width / 2, GROUND_Y - height / 2, width, height, {
-        isStatic: true,
-        friction: 0.8,
-        restitution: 0.4,
-        render: { fillColor: 0xA0A0A0, lineColor: 0x000000, lineOpacity: 0.5 },
-        label: `building_${i}`,
-      }) as MatterJS.BodyType;
-      matter.world.add(body);
-      solidBodies.push(body);
-    }
+    const body = matter.bodies.rectangle(x + width / 2, GROUND_Y - height / 2, width, height, {
+      isStatic: true,
+      friction: 0.8,
+      restitution: 0.4,
+      render: { fillColor: isTarget ? 0xFF0000 : 0xA0A0A0, lineColor: 0x000000, lineOpacity: 0.5 },
+      label: isTarget ? 'targetBuilding' : `building_${i}`,
+    }) as MatterJS.BodyType;
+    matter.world.add(body);
+    solidBodies.push(body);
+    if (isTarget) targetBody = body;
   }
 
-  return { solidBodies, targetBricks, secondaryBricks, targetIndex };
+  return { solidBodies, targetBody, targetBricks, secondaryBricks, targetIndex };
 }
 
+/**
+ * Replace a solid building with fresh dynamic bricks.
+ */
 export function explodeBuilding(
   matter: Phaser.Physics.Matter.MatterPhysics,
   building: MatterJS.BodyType,
   solidBodies: MatterJS.BodyType[],
   secondaryBricks: MatterJS.BodyType[],
 ): void {
-  const b  = building.bounds;
-  const bw = b.max.x - b.min.x;
-  const bh = b.max.y - b.min.y;
-  const cx = (b.min.x + b.max.x) / 2;
-  const cy = (b.min.y + b.max.y) / 2;
+  const { min, max } = building.bounds;
+  const bw = max.x - min.x;
+  const bh = max.y - min.y;
+  const cx = (min.x + max.x) / 2;
+  const cy = (min.y + max.y) / 2;
 
   matter.world.remove(building);
   const idx = solidBodies.indexOf(building);
   if (idx > -1) solidBodies.splice(idx, 1);
 
-  const startLen = secondaryBricks.length;
-  createBrickBuilding(matter, b.min.x, bw, bh, false, [], secondaryBricks);
+  const cols = Math.max(1, Math.round(bw / BRICK_W));
+  const rows = Math.max(1, Math.round(bh / BRICK_H));
+  const actualBW = bw / cols;
+  const actualBH = bh / rows;
 
-  for (let i = startLen; i < secondaryBricks.length; i++) {
-    const brick = secondaryBricks[i];
-    matter.body.setStatic(brick, false);
-    const dx = brick.position.x - cx;
-    const dy = brick.position.y - cy;
-    const angle = Math.atan2(dy, dx);
-    const force = 25 * (0.6 + Math.random() * 0.4);
-    matter.body.setVelocity(brick, { x: Math.cos(angle) * force, y: Math.sin(angle) * force });
-    matter.body.setAngularVelocity(brick, (Math.random() - 0.5) * 0.4);
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const bx = min.x + col * actualBW + actualBW / 2;
+      const by = min.y + row * actualBH + actualBH / 2;
+      const brick = matter.bodies.rectangle(bx, by, actualBW - 2, actualBH - 2, {
+        isStatic: false,
+        friction: BRICK_FRICTION,
+        restitution: BRICK_RESTITUTION,
+        density: BRICK_DENSITY,
+        frictionAir: BRICK_AIR_FRICTION,
+        render: { fillColor: 0x8888AA, lineColor: 0x000000, lineOpacity: 0.3 },
+        label: 'secondaryBrick',
+      }) as MatterJS.BodyType;
+
+      // Small outward nudge so bricks don't pile up and cause physics instability
+      const dx = bx - cx;
+      const dy = by - cy;
+      const angle = Math.atan2(dy, dx);
+      matter.body.setVelocity(brick, {
+        x: Math.cos(angle) * 3,
+        y: Math.sin(angle) * 3,
+      });
+
+      matter.world.add(brick);
+      secondaryBricks.push(brick);
+    }
+  }
+}
+
+/**
+ * Replace static target bricks with fresh dynamic bodies at the same positions.
+ * Avoids Phaser 4's broken static→dynamic conversion.
+ * Returns the new dynamic bodies (replaces targetBricks in place).
+ */
+/**
+ * Replace the single solid target body with a grid of fresh dynamic bricks.
+ */
+export function activateTargetBuilding(
+  matter: Phaser.Physics.Matter.MatterPhysics,
+  data: BuildingData,
+): void {
+  if (!data.targetBody) return;
+
+  const { min, max } = data.targetBody.bounds;
+  const bw = max.x - min.x;
+  const bh = max.y - min.y;
+
+  // Remove solid body from world and tracking
+  matter.world.remove(data.targetBody);
+  const idx = data.solidBodies.indexOf(data.targetBody);
+  if (idx > -1) data.solidBodies.splice(idx, 1);
+  data.targetBody = null;
+
+  // Spawn dynamic bricks filling the same footprint
+  const cols = Math.max(1, Math.round(bw / BRICK_W));
+  const rows = Math.max(1, Math.round(bh / BRICK_H));
+  const actualBW = bw / cols;
+  const actualBH = bh / rows;
+
+  for (let row = 0; row < rows; row++) {
+    for (let col = 0; col < cols; col++) {
+      const cx = min.x + col * actualBW + actualBW / 2;
+      const cy = min.y + row * actualBH + actualBH / 2;
+      const brick = matter.bodies.rectangle(cx, cy, actualBW - 2, actualBH - 2, {
+        isStatic: false,
+        friction: BRICK_FRICTION,
+        restitution: BRICK_RESTITUTION,
+        density: BRICK_DENSITY,
+        frictionAir: BRICK_AIR_FRICTION,
+        render: { fillColor: 0xFF4444, lineColor: 0x000000, lineOpacity: 0.3 },
+        label: 'targetBrick',
+      }) as MatterJS.BodyType;
+      matter.world.add(brick);
+      data.targetBricks.push(brick);
+    }
   }
 }
 

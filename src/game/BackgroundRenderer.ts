@@ -1,5 +1,5 @@
 import Phaser from 'phaser';
-import { GROUND_Y, WORLD_WIDTH } from '../types/GameState';
+import { GROUND_Y } from '../types/GameState';
 
 // World Y extents for the gradient
 const DARK_Y  = -8000;
@@ -16,7 +16,8 @@ function worldYToSkyColor(worldY: number): number {
 export function createBackground(
   scene: Phaser.Scene,
   clouds: Array<{ x: number; y: number; r: number }>,
-  trees:  Array<{ x: number; trunkH: number; canopyR: number; color: number }>
+  trees:  Array<{ x: number; trunkH: number; canopyR: number; color: number }>,
+  fieldEnd = 35100
 ): void {
   // --- Sky gradient ---
   // Draw gradient from DARK_Y to LIGHT_Y in world space as a tall rectangle.
@@ -26,13 +27,47 @@ export function createBackground(
   const skyGfx = scene.add.graphics();
   skyGfx.setDepth(-200);
 
+  // Solid dark cap extending far above the gradient so the sky never runs out
+  const darkestColor = worldYToSkyColor(DARK_Y);
+  skyGfx.fillStyle(darkestColor);
+  skyGfx.fillRect(-2000, -200000, fieldEnd + 6000, 200000 + DARK_Y);
+
+  // Tiling star field in the dark zone above the gradient
+  const STAR_TOP      = -50000; // cover well above realistic max flight
+  const TILE_SIZE     = 3000;   // world units per tile
+  const STARS_PER_TILE = 60;
+  const xFrom = -2000;
+  const xTo   = fieldEnd + 6000;
+
+  // Generate a repeating star pattern (same positions each tile)
+  const rng = { v: 42 }; // deterministic seed
+  const rand = () => { rng.v = (rng.v * 16807 + 0) % 2147483647; return (rng.v - 1) / 2147483646; };
+  const starPattern = Array.from({ length: STARS_PER_TILE }, () => ({
+    dx:    rand() * TILE_SIZE,
+    dy:    rand() * TILE_SIZE,
+    size:  rand() < 0.8 ? 2 : 4,
+    alpha: 0.35 + rand() * 0.65,
+  }));
+
+  const starGfx = scene.add.graphics();
+  starGfx.setDepth(-199);
+
+  for (let tx = xFrom; tx < xTo; tx += TILE_SIZE) {
+    for (let ty = STAR_TOP; ty < DARK_Y; ty += TILE_SIZE) {
+      for (const s of starPattern) {
+        starGfx.fillStyle(0xffffff, s.alpha);
+        starGfx.fillRect(tx + s.dx, ty + s.dy, s.size, s.size);
+      }
+    }
+  }
+
   for (let i = 0; i < BANDS; i++) {
     const topY   = DARK_Y + i * bandH;
     const botY   = topY + bandH;
     const cTop   = worldYToSkyColor(topY);
     const cBot   = worldYToSkyColor(botY);
     skyGfx.fillGradientStyle(cTop, cTop, cBot, cBot, 1);
-    skyGfx.fillRect(-2000, topY, WORLD_WIDTH + 4000, bandH + 1);
+    skyGfx.fillRect(-2000, topY, fieldEnd + 6000, bandH + 1);
   }
 
   // --- Clouds ---
@@ -61,10 +96,14 @@ export function createBackground(
     trunkGfx.fillStyle(0x5d4037);
     trunkGfx.fillRect(bx - 9, by - tree.trunkH, 18, tree.trunkH);
 
-    // Canopy layers
-    canopyGfx.fillStyle(tree.color);
+    // Canopy: draw darker base first, then lighter upper clusters on top
+    const darkerColor = Phaser.Display.Color.ValueToColor(tree.color).darken(20).color;
+    const lighterColor = Phaser.Display.Color.ValueToColor(tree.color).lighten(25).color;
+
+    canopyGfx.fillStyle(darkerColor);
     canopyGfx.fillCircle(bx, by - tree.trunkH, tree.canopyR);
-    canopyGfx.fillStyle(Phaser.Display.Color.ValueToColor(`#${tree.color.toString(16).padStart(6, '0')}cc`).color);
+
+    canopyGfx.fillStyle(lighterColor);
     canopyGfx.fillCircle(bx - tree.canopyR * 0.3, by - tree.trunkH - tree.canopyR * 0.4, tree.canopyR * 0.65);
     canopyGfx.fillCircle(bx + tree.canopyR * 0.3, by - tree.trunkH - tree.canopyR * 0.3, tree.canopyR * 0.6);
   }

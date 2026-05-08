@@ -51,7 +51,9 @@ export class BusterController {
 
   startRun(): void {
     if (!this.runBody) return;
-    this.matter.body.setStatic(this.runBody, false);
+    // Keep the run body STATIC throughout — physics forces are irrelevant during the
+    // scripted run-up. Setting it dynamic causes NaN after the first physics step
+    // due to degenerate collision geometry (fromVertices ramp body).
     this.isRunning = true;
     this.phase = 'backup';
     this.runSpeed = 0;
@@ -76,28 +78,19 @@ export class BusterController {
     const { rampLength, angleRad } = getRampGeometry(angleDeg);
 
     if (this.phase === 'backup') {
-      const target = BUSTER_START_X - RUN_BACKUP_DISTANCE;
+      const target = BUSTER_START_X - 300; // reduced for testing
       this.matter.body.setPosition(this.runBody, { x: pos.x - RUN_BACKUP_SPEED, y: groundY });
-      this.matter.body.setVelocity(this.runBody, { x: -RUN_BACKUP_SPEED, y: 0 });
-      this.matter.body.setAngle(this.runBody, 0);
-      this.matter.body.setAngularVelocity(this.runBody, 0);
       if (pos.x <= target) { this.phase = 'forward'; this.runSpeed = 2; }
 
     } else if (this.phase === 'forward') {
       this.runSpeed = Math.min(this.runSpeed + RUN_FORWARD_ACCEL, RUN_FORWARD_MAX);
       this.matter.body.setPosition(this.runBody, { x: pos.x + this.runSpeed, y: groundY });
-      this.matter.body.setVelocity(this.runBody, { x: this.runSpeed, y: 0 });
-      this.matter.body.setAngle(this.runBody, 0);
-      this.matter.body.setAngularVelocity(this.runBody, 0);
       if (pos.x >= RAMP_START_X) this.phase = 'ramp';
 
     } else if (this.phase === 'ramp') {
       const dx = Math.cos(angleRad) * this.runSpeed;
       const dy = Math.sin(angleRad) * this.runSpeed;
       this.matter.body.setPosition(this.runBody, { x: pos.x + dx, y: pos.y + dy });
-      this.matter.body.setVelocity(this.runBody, { x: dx, y: dy });
-      this.matter.body.setAngle(this.runBody, angleRad);
-      this.matter.body.setAngularVelocity(this.runBody, 0);
       if (pos.x >= RAMP_START_X + rampLength) this.launch(speedPct, angleDeg);
     }
   }
@@ -120,6 +113,8 @@ export class BusterController {
     this.flightAngle = angleRad + Math.PI / 2;
     this.isFlying = true;
     this.phase = 'launched';
+    this.lastPhase = 'launched';
+    this.onPhaseChange?.('launched');
 
     this.matter.body.setAngle(this.ragdoll.buster, this.flightAngle);
     this.matter.body.setVelocity(this.ragdoll.buster, { x: vx, y: vy });

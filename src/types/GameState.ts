@@ -42,17 +42,17 @@ export const RAMP_DEFAULT_ANGLE = 45;
 export const BUILDING_WIDTHS  = [300, 400, 500, 600, 700, 800] as const;
 export const BUILDING_HEIGHTS = [600, 800, 1000, 1200, 1400, 1600] as const;
 export const TARGET_HEIGHT    = 2000;
-export const BRICK_W          = 100;
-export const BRICK_H          = 60;
+export const BRICK_W          = 200;
+export const BRICK_H          = 150;
 
-// Brick physics
-export const BRICK_DENSITY     = 0.002;
-export const BRICK_FRICTION    = 0.8;
-export const BRICK_RESTITUTION = 0.05;
-export const BRICK_AIR_FRICTION = 0.15;
+// Brick physics — light and bouncy so they scatter and cause chain reactions
+export const BRICK_DENSITY      = 0.0001;
+export const BRICK_FRICTION     = 0.1;
+export const BRICK_RESTITUTION  = 0.6;
+export const BRICK_AIR_FRICTION = 0.005;
 
 // Velocity threshold for chain-reaction building destruction
-export const CHAIN_VELOCITY_THRESHOLD = 2.125;
+export const CHAIN_VELOCITY_THRESHOLD = 3;
 
 // Scene keys
 export const SCENE = {

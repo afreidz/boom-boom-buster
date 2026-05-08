@@ -3,11 +3,11 @@ import {
   WORLD_HEIGHT, GROUND_Y, BUSTER_START_X,
   BUILDINGS_START_X, NUM_BUILDINGS, BUILDING_SPACING,
   RAMP_DEFAULT_ANGLE, RAMP_MIN_ANGLE, RAMP_MAX_ANGLE,
-  GRAVITY_SCALE, TIME_SCALE, SCENE, KEY,
+  GRAVITY_SCALE, TIME_SCALE, SCENE, KEY, TARGET_HEIGHT,
 } from '../types/GameState';
 import { createBackground, generateClouds, generateTrees } from '../game/BackgroundRenderer';
 import { createRamp, removeRamp, RampBodies } from '../game/RampFactory';
-import { createBuildings, explodeBuilding, settleBricks, shouldChainExplode, BuildingData } from '../game/BuildingFactory';
+import { createBuildings, activateTargetBuilding, explodeBuilding, settleBricks, shouldChainExplode, BuildingData } from '../game/BuildingFactory';
 import { breakLimbs } from '../game/RagdollFactory';
 import { BusterController, RunPhase } from '../game/BusterController';
 import { CameraController } from '../game/CameraController';
@@ -34,6 +34,7 @@ export class GameScene extends Phaser.Scene {
   private targetIndex  = 0;
 
   private speedInterval: number | null = null;
+  private followBuster = false;
   private theme: Phaser.Sound.BaseSound | null = null;
   private sfxRunning!: Phaser.Sound.BaseSound;
   private sfxWoosh!:   Phaser.Sound.BaseSound;
@@ -42,8 +43,8 @@ export class GameScene extends Phaser.Scene {
   private sfxCrashes!: Phaser.Sound.BaseSound[];
   private sfxScreams!: Phaser.Sound.BaseSound[];
 
-  private runSheet!: HTMLImageElement;
-  private iconImg!:  HTMLImageElement;
+  private busterSprite!: Phaser.GameObjects.Sprite;
+  private headSprite!:   Phaser.GameObjects.Image;
 
   constructor() { super({ key: SCENE.GAME }); }
 
@@ -61,7 +62,8 @@ export class GameScene extends Phaser.Scene {
   }
 
   create(): void {
-    this.cameras.main.setBounds(-2000, -6000, 22000, WORLD_HEIGHT + 6000);
+    // No camera bounds — bounds clamping at varying zoom levels causes jerky tween motion.
+    // The physics world constrains gameplay; the camera can move freely.
     this.matter.world.setGravity(0, 1, GRAVITY_SCALE);
     this.matter.world.engine.timing.timeScale = TIME_SCALE;
 
@@ -69,12 +71,14 @@ export class GameScene extends Phaser.Scene {
     const maxIdx = NUM_BUILDINGS - 2;
     this.targetIndex = Phaser.Math.Between(minIdx, maxIdx);
 
-    const fieldEnd = BUILDINGS_START_X + (NUM_BUILDINGS - 1) * BUILDING_SPACING + 800;
-    createBackground(this, generateClouds(fieldEnd), generateTrees(fieldEnd));
+    const fieldEnd = BUILDINGS_START_X + (NUM_BUILDINGS - 1) * BUILDING_SPACING + 800; // ~35100
+    createBackground(this, generateClouds(fieldEnd), generateTrees(fieldEnd), fieldEnd);
+
+    // No camera bounds — see above.
 
     // Ground
     this.ground = this.matter.bodies.rectangle(
-      11000, WORLD_HEIGHT - 50, 90000, 100,
+      fieldEnd / 2, WORLD_HEIGHT - 50, fieldEnd + 8000, 100,
       { isStatic: true, render: { fillColor: 0x8B4513 }, label: 'ground' }
     ) as MatterJS.BodyType;
     this.matter.world.add(this.ground);
@@ -86,10 +90,16 @@ export class GameScene extends Phaser.Scene {
     this.buster.create();
     this.buster.onPhaseChange = (p) => this.onRunPhaseChange(p);
 
-    this.camCtrl = new CameraController(this.cameras.main);
+    this.camCtrl = new CameraController(this);
 
-    this.runSheet = new Image(); this.runSheet.src = '/sprites/running.png';
-    this.iconImg  = new Image(); this.iconImg.src  = '/buster-icon.png';
+    // Sprite game objects — positioned in update() each frame
+    this.busterSprite = this.add.sprite(BUSTER_START_X, GROUND_Y - 60, KEY.RUNNING, 0)
+      .setDepth(10)
+      .setDisplaySize(90, 90);
+    this.headSprite = this.add.image(BUSTER_START_X, GROUND_Y - 100, KEY.ICON)
+      .setDepth(10)
+      .setDisplaySize(40, 40)
+      .setVisible(false);
 
     this.sfxRunning = this.sound.add(KEY.SFX_RUNNING, { loop: true });
     this.sfxWoosh   = this.sound.add(KEY.SFX_WOOSH);
@@ -144,11 +154,11 @@ export class GameScene extends Phaser.Scene {
   }
 
   private startRun(): void {
-    this.cameras.main.pan(BUSTER_START_X, GROUND_Y - 60, 800, 'Sine.easeInOut');
-    this.cameras.main.zoomTo(4, 800, 'Sine.easeInOut');
-    this.time.delayedCall(1000, () => {
+    const pos = this.buster.position;
+    this.camCtrl.zoomToBuster(pos.x, pos.y, () => {
+      this.followBuster = true;
       this.buster.startRun();
-      this.time.delayedCall(8000, () => { if (!this.firstImpact) this.triggerFailsafe(); });
+      this.time.delayedCall(8000,  () => { if (!this.firstImpact) this.triggerFailsafe(); });
       this.time.delayedCall(10000, () => this.doSettleBricks());
     });
   }
@@ -176,63 +186,77 @@ export class GameScene extends Phaser.Scene {
   }
 
   private setupPhysicsEvents(): void {
-    this.matter.world.on('beforeupdate', () => this.buster.update(this.speed, this.rampAngle));
+    // Run buster FSM in beforeupdate so setPosition/setVelocity take effect
+    // before the physics engine processes them this tick.
+    this.matter.world.on('beforeupdate', () => {
+      if (this.gameStarted) this.buster.update(this.speed, this.rampAngle);
+    });
 
-    this.matter.world.on('collisionstart', (event: { pairs: MatterJS.IPair[] }) => {
-      this.handleCollisions(event.pairs);
+    this.matter.world.on('collisionstart', (event: any) => {
+      this.handleCollisions(event.pairs as MatterJS.IPair[]);
     });
   }
 
   private handleCollisions(pairs: MatterJS.IPair[]): void {
-    const isGround    = (b: MatterJS.BodyType) => b === this.ground;
-    const isSolid     = (b: MatterJS.BodyType) => this.buildings.solidBodies.includes(b);
-    const isTarget    = (b: MatterJS.BodyType) => this.buildings.targetBricks.includes(b);
-    const isTargetDyn = (b: MatterJS.BodyType) => isTarget(b) && !b.isStatic;
-    const isSecDyn    = (b: MatterJS.BodyType) => this.buildings.secondaryBricks.includes(b) && !b.isStatic;
+    const isGround      = (b: MatterJS.BodyType) => b === this.ground;
+    const isSolid       = (b: MatterJS.BodyType) => this.buildings.solidBodies.includes(b);
+    const isTargetBody  = (b: MatterJS.BodyType) => b === this.buildings.targetBody;
+    const isTargetBrick = (b: MatterJS.BodyType) => this.buildings.targetBricks.includes(b);
+    const isSecBrick    = (b: MatterJS.BodyType) => this.buildings.secondaryBricks.includes(b);
 
     for (const pair of pairs) {
       // Cast from MatterJS.Body to MatterJS.BodyType
       const a = pair.bodyA as unknown as MatterJS.BodyType;
       const b = pair.bodyB as unknown as MatterJS.BodyType;
 
-      // Buster hits target brick → activate
+      // Buster hits the target building → swap for dynamic bricks
       if (!this.hitTarget) {
-        const hit = (this.buster.isBusterPart(a) && isTarget(b)) || (this.buster.isBusterPart(b) && isTarget(a));
+        const hit = (this.buster.isBusterPart(a) && isTargetBody(b))
+                 || (this.buster.isBusterPart(b) && isTargetBody(a));
         if (hit) {
           this.hitTarget = true;
-          const impactPos = this.buster.isBusterPart(a) ? b.position : a.position;
-          const vel = this.buster.ragdoll?.buster.velocity ?? { x: 0, y: 0 };
-          this.buildings.targetBricks.forEach(brick => {
-            this.matter.body.setStatic(brick, false);
-            const dx = brick.position.x - impactPos.x;
-            const dy = brick.position.y - impactPos.y;
-            const dist = Math.sqrt(dx * dx + dy * dy);
-            const angle = Math.atan2(dy, dx);
-            const falloff = Math.max(0.1, 1 - dist / 800);
-            this.matter.body.setVelocity(brick, {
-              x: vel.x * 0.6 * falloff + Math.cos(angle) * 10 * falloff,
-              y: vel.y * 0.6 * falloff + Math.sin(angle) * 10 * falloff,
-            });
+          this.followBuster = false;
+          activateTargetBuilding(this.matter, this.buildings);
+
+          // Zoom out to show the surrounding damage area
+          const tx = BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400;
+          const ty = GROUND_Y - TARGET_HEIGHT / 2;
+          const damageZoom = this.cameras.main.width / 8000;
+          const startZoom = this.cameras.main.zoom;
+          const startX    = this.cameras.main.midPoint.x;
+          const startY    = this.cameras.main.midPoint.y;
+
+          this.tweens.add({
+            targets: { t: 0 }, t: 1, duration: 1200, ease: 'Sine.easeOut',
+            onUpdate: (tween) => {
+              const t = tween.progress;
+              this.cameras.main.setZoom(Phaser.Math.Linear(startZoom, damageZoom, t));
+              this.cameras.main.centerOn(
+                Phaser.Math.Linear(startX, tx, t),
+                Phaser.Math.Linear(startY, ty, t),
+              );
+            },
           });
         }
       }
 
-      // Chain explosions
-      if ((isTargetDyn(a) && isSolid(b)) || (isTargetDyn(b) && isSolid(a))) {
-        const brick    = isTargetDyn(a) ? a : b;
+      // Chain explosions: target bricks or secondary bricks hitting solid buildings
+      const flyingHitsSolid =
+        ((isTargetBrick(a) || isSecBrick(a)) && isSolid(b)) ||
+        ((isTargetBrick(b) || isSecBrick(b)) && isSolid(a));
+
+      if (flyingHitsSolid) {
+        const brick    = (isTargetBrick(a) || isSecBrick(a)) ? a : b;
         const building = isSolid(a) ? a : b;
-        if (shouldChainExplode(brick)) explodeBuilding(this.matter, building, this.buildings.solidBodies, this.buildings.secondaryBricks);
-      }
-      if ((isSecDyn(a) && isSolid(b)) || (isSecDyn(b) && isSolid(a))) {
-        const brick    = isSecDyn(a) ? a : b;
-        const building = isSolid(a) ? a : b;
-        if (shouldChainExplode(brick)) explodeBuilding(this.matter, building, this.buildings.solidBodies, this.buildings.secondaryBricks);
+        if (shouldChainExplode(brick)) {
+          explodeBuilding(this.matter, building, this.buildings.solidBodies, this.buildings.secondaryBricks);
+        }
       }
 
       // First impact
       if (!this.limbsBroken) {
-        const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isTarget(b)))
-                  || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isTarget(a)));
+        const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isTargetBody(b) || isTargetBrick(b)))
+                  || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isTargetBody(a) || isTargetBrick(a)));
         if (bHit) {
           this.limbsBroken = true;
           this.buster.stopFlight();
@@ -242,7 +266,11 @@ export class GameScene extends Phaser.Scene {
           if (!this.firstImpact) {
             this.firstImpact = true;
             this.time.delayedCall(2000, () => {
-              if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(); }
+              if (!this.runComplete) {
+                this.runComplete = true;
+                this.followBuster = false;
+                this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2);
+              }
               if (!this.hitTarget) this.time.delayedCall(2000, () => this.showResetModal());
             });
           }
@@ -253,8 +281,8 @@ export class GameScene extends Phaser.Scene {
       if (this.limbsBroken && this.firstImpact && !this.runComplete) {
         const now = Date.now();
         if (now - this.lastImpactMs > 800) {
-          const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isTarget(b)))
-                    || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isTarget(a)));
+          const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isTargetBody(b) || isTargetBrick(b)))
+                    || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isTargetBody(a) || isTargetBrick(a)));
           if (bHit) { this.lastImpactMs = now; this.playImpactSounds(); }
         }
       }
@@ -265,7 +293,7 @@ export class GameScene extends Phaser.Scene {
     this.stopAllEffects();
     settleBricks(this.matter, this.buildings.targetBricks);
     settleBricks(this.matter, this.buildings.secondaryBricks);
-    if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(); }
+    if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2); }
     if (this.hitTarget) this.showResetModal();
   }
 
@@ -275,7 +303,7 @@ export class GameScene extends Phaser.Scene {
     this.buster.stopFlight();
     if (this.buster.ragdoll) breakLimbs(this.matter, this.buster.ragdoll);
     this.firstImpact = true;
-    this.time.delayedCall(2000, () => { if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(); } });
+    this.time.delayedCall(2000, () => { if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2); } });
   }
 
   private showResetModal(): void {
@@ -294,8 +322,45 @@ export class GameScene extends Phaser.Scene {
   }
 
   update(): void {
-    if (!this.gameStarted) return;
-    const pos = this.buster.position;
-    this.cameras.main.pan(pos.x, pos.y, 50, 'Linear');
+    this.updateBusterSprite();
+
+    if (this.gameStarted && this.followBuster && !this.runComplete) {
+      const pos = this.buster.position;
+      this.cameras.main.centerOn(pos.x, pos.y);
+    }
+  }
+
+  private updateBusterSprite(): void {
+    const b = this.buster;
+    const RUN_SPRITE_FRAMES = 5;
+    const RUN_SPRITE_FPS    = 12;
+
+    if (b.runBody) {
+      // Run body visible — show animated or static run sprite
+      this.busterSprite.setVisible(true);
+      this.headSprite.setVisible(false);
+      this.busterSprite.setPosition(b.runBody.position.x, b.runBody.position.y);
+      this.busterSprite.setAngle(Phaser.Math.RadToDeg(b.runBody.angle));
+
+      if (b.phase === 'forward') {
+        // Advance animation frame manually
+        const fps = RUN_SPRITE_FPS;
+        const frameMs = 1000 / fps;
+        const frame = Math.floor((Date.now() / frameMs) % RUN_SPRITE_FRAMES);
+        this.busterSprite.setFrame(frame);
+      } else {
+        this.busterSprite.setFrame(0);
+      }
+    } else if (b.ragdoll && b.ragdoll.buster.parts.length > 2) {
+      // Ragdoll — show head icon at head part position
+      this.busterSprite.setVisible(false);
+      const head = b.ragdoll.buster.parts[2] as MatterJS.BodyType;
+      this.headSprite.setVisible(true);
+      this.headSprite.setPosition(head.position.x, head.position.y);
+      this.headSprite.setAngle(Phaser.Math.RadToDeg(head.angle));
+    } else {
+      this.busterSprite.setVisible(false);
+      this.headSprite.setVisible(false);
+    }
   }
 }
