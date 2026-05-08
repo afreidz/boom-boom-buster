@@ -51,6 +51,11 @@ class BoomBoomBuster {
   private isDraggingAngle: boolean = false;
   private angleCanvas: HTMLCanvasElement | null = null;
   private busterIcon: HTMLImageElement | null = null;
+  private runSprite: HTMLImageElement | null = null;
+  private runSpriteFrame: number = 0;
+  private runSpriteLastTime: number = 0;
+  private readonly RUN_SPRITE_FRAMES = 5;
+  private readonly RUN_SPRITE_FPS = 12;
   private clouds: Array<{ x: number; y: number; r: number }> = [];
   private trees: Array<{ x: number; trunkH: number; canopyR: number; color: string }> = [];
   private hitTargetBuilding: boolean = false;
@@ -109,6 +114,10 @@ class BoomBoomBuster {
     const img = new Image();
     img.src = '/buster-icon.png';
     img.onload = () => { this.busterIcon = img; };
+
+    const runImg = new Image();
+    runImg.src = '/sprites/running.png';
+    runImg.onload = () => { this.runSprite = runImg; };
 
     // Trees scattered across the playing field
     const fieldEnd = this.BUILDINGS_START_X + (this.NUM_BUILDINGS - 1) * 1000 + 800;
@@ -181,7 +190,7 @@ class BoomBoomBuster {
   }
 
   private playImpactSounds() {
-    if (!this.sounds) return;
+    if (!this.sounds || this.runComplete) return;
     const randomCrash = this.sounds.crashes[Math.floor(Math.random() * this.sounds.crashes.length)];
     const randomScream = this.sounds.screams[Math.floor(Math.random() * this.sounds.screams.length)];
     this.playEffect(randomCrash);
@@ -290,11 +299,12 @@ class BoomBoomBuster {
     const groundY = this.WORLD_HEIGHT - 100;
     const busterY = groundY - 60;
 
-    // Single body used during run-up — sprite will be attached here
-    this.busterRunBody = Bodies.rectangle(busterX, busterY, bodyWidth, bodyHeight + headRadius * 2, {
+    // Single square body used during run-up — sprite will be attached here
+    const runBodySize = bodyHeight + headRadius * 2; // 90 — makes a square
+    this.busterRunBody = Bodies.rectangle(busterX, busterY, runBodySize, runBodySize, {
       isStatic: true,
       friction: 0.5,
-      render: { fillStyle: '#FF6347' },
+      render: { fillStyle: 'transparent', opacity: 0 },
       label: 'busterRunBody'
     });
 
@@ -634,30 +644,78 @@ class BoomBoomBuster {
   }
 
   private drawBusterSprite() {
-    if (!this.busterIcon) return;
-
     const bounds = this.render.bounds;
     const canvas = this.render.canvas;
     const ctx = this.render.context;
     const scaleX = canvas.width / (bounds.max.x - bounds.min.x);
     const scaleY = canvas.height / (bounds.max.y - bounds.min.y);
-    const headRadius = 20;
-    const size = headRadius * 2 * scaleX;
 
     const toScreen = (wx: number, wy: number) => ({
       x: (wx - bounds.min.x) * scaleX,
       y: (wy - bounds.min.y) * scaleY
     });
 
-    const headYOffset = 40; // head is 40 world units above the run body center
+    // Animated run sprite during forward phase
+    if (this.isRunning && this.busterRunBody && this.runPhase === 'forward' && this.runSprite) {
+      const frameW = this.runSprite.naturalWidth / this.RUN_SPRITE_FRAMES;
+      const frameH = this.runSprite.naturalHeight;
 
-    if (this.isRunning && this.busterRunBody) {
-      const { x, y } = toScreen(this.busterRunBody.position.x, this.busterRunBody.position.y - headYOffset);
+      // Advance frame on timer
+      const now = Date.now();
+      if (now - this.runSpriteLastTime > 1000 / this.RUN_SPRITE_FPS) {
+        this.runSpriteFrame = (this.runSpriteFrame + 1) % this.RUN_SPRITE_FRAMES;
+        this.runSpriteLastTime = now;
+      }
+
+      // Square display matching run body size in world units
+      const runBodySize = 90; // world units — matches the square physics body
+      const destSize = runBodySize * scaleX;
+      const pos = this.busterRunBody.position;
+      const { x, y } = toScreen(pos.x, pos.y);
+
+      // Clip source to a square (frameW × frameW), centered vertically in the frame
+      const srcX = this.runSpriteFrame * frameW;
+      const srcY = (frameH - frameW) / 2;
+
       ctx.save();
-      ctx.translate(x, y);
-      ctx.drawImage(this.busterIcon, -size / 2, -size / 2, size, size);
+      ctx.drawImage(
+        this.runSprite,
+        srcX, srcY, frameW, frameW,        // square source crop
+        x - destSize / 2, y - destSize / 2, // centered on body
+        destSize, destSize
+      );
       ctx.restore();
-    } else if (this.buster && this.buster.parts.length > 2) {
+      return; // skip head icon while run sprite is active
+    }
+
+    // Static run frame for idle, backup and ramp phases
+    if (this.busterRunBody && this.runSprite) {
+      const frameW = this.runSprite.naturalWidth / this.RUN_SPRITE_FRAMES;
+      const frameH = this.runSprite.naturalHeight;
+      const staticFrame = 0;
+      const runBodySize = 90;
+      const destSize = runBodySize * scaleX;
+      const pos = this.busterRunBody.position;
+      const { x, y } = toScreen(pos.x, pos.y);
+      const srcY = (frameH - frameW) / 2;
+
+      ctx.save();
+      ctx.drawImage(
+        this.runSprite,
+        staticFrame * frameW, srcY, frameW, frameW,
+        x - destSize / 2, y - destSize / 2,
+        destSize, destSize
+      );
+      ctx.restore();
+      return;
+    }
+
+    // Head icon — ragdoll only
+    if (!this.busterIcon) return;
+    const headRadius = 20;
+    const size = headRadius * 2 * scaleX;
+
+    if (this.buster && this.buster.parts.length > 2) {
       // Draw at head part position, rotated with the body
       const head = this.buster.parts[2];
       const { x, y } = toScreen(head.position.x, head.position.y);
@@ -1008,6 +1066,7 @@ class BoomBoomBuster {
                   // If didn't hit target building, show dialog after outro animation completes
                   if (!this.hitTargetBuilding) {
                     this.impactTimeout = window.setTimeout(() => {
+                      this.stopAllEffects();
                       const resetModal = document.getElementById('reset-modal')!;
                       resetModal.style.display = 'flex';
                     }, 2000);
@@ -1024,7 +1083,7 @@ class BoomBoomBuster {
       // Play impact sounds for subsequent collisions after first impact
       if (this.limbsBroken && this.buster && this.firstImpact) {
         const now = Date.now();
-        if (now - this.lastImpactSoundTime > 400) {
+        if (now - this.lastImpactSoundTime > 800) {
           for (const pair of pairs) {
             const bodyA = pair.bodyA;
             const bodyB = pair.bodyB;
@@ -1363,6 +1422,8 @@ class BoomBoomBuster {
 
     this.brickSettleTimeout = window.setTimeout(() => {
       this.brickSettleTimeout = null;
+      // Stop all effects as bricks settle
+      this.stopAllEffects();
       this.targetBuilding.forEach(brick => {
         if (!brick.isStatic) {
           Body.setVelocity(brick, { x: 0, y: 0 });
