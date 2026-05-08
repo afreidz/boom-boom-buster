@@ -10,8 +10,14 @@ export class BootScene extends Phaser.Scene {
       frameWidth:  Math.floor(2048 / 5),
       frameHeight: 1360,
     });
-    this.load.image(KEY.EXPLODED, '/sprites/exploded.png');
-    this.load.image(KEY.ICON,    '/buster-icon.png');
+    this.load.image(KEY.EXPLODED,     '/sprites/exploded.png');
+    this.load.image(KEY.ICON,         '/buster-icon.png');
+    this.load.image(KEY.BUSTER_HEAD,  '/sprites/buster/head.png');
+    this.load.image(KEY.BUSTER_TORSO, '/sprites/buster/torso.png');
+    this.load.image(KEY.BUSTER_ARM_L, '/sprites/buster/arm-left.png');
+    this.load.image(KEY.BUSTER_ARM_R, '/sprites/buster/arm-right.png');
+    this.load.image(KEY.BUSTER_LEG_L, '/sprites/buster/leg-left.png');
+    this.load.image(KEY.BUSTER_LEG_R, '/sprites/buster/leg-right.png');
 
     // Audio
     this.load.audio(KEY.THEME,       '/sounds/music/theme.mp3');

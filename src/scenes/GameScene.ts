@@ -8,7 +8,7 @@ import {
 import { createBackground, generateClouds, generateTrees } from '../game/BackgroundRenderer';
 import { createRamp, removeRamp, RampBodies } from '../game/RampFactory';
 import { createBuildings, activateTargetBuilding, explodeBuilding, settleBricks, shouldChainExplode, BuildingData } from '../game/BuildingFactory';
-import { breakLimbs } from '../game/RagdollFactory';
+import { breakLimbs, T_W, T_H, H_R, AL_W, AL_H, AR_W, AR_H, LL_W, LL_H, LR_W, LR_H } from '../game/RagdollFactory';
 import { BusterController, RunPhase } from '../game/BusterController';
 import { CameraController } from '../game/CameraController';
 import { AngleArcWidget } from '../ui/AngleArcWidget';
@@ -47,8 +47,13 @@ export class GameScene extends Phaser.Scene {
   private sfxExplosions!: Phaser.Sound.BaseSound[]; // pool for simultaneous playback
   private explosionIdx = 0;
 
-  private busterSprite!: Phaser.GameObjects.Sprite;
-  private headSprite!:   Phaser.GameObjects.Image;
+  // One Image per body part — updated every frame in updateBusterSprite()
+  private imgHead!:  Phaser.GameObjects.Image;
+  private imgTorso!: Phaser.GameObjects.Image;
+  private imgArmL!:  Phaser.GameObjects.Image;
+  private imgArmR!:  Phaser.GameObjects.Image;
+  private imgLegL!:  Phaser.GameObjects.Image;
+  private imgLegR!:  Phaser.GameObjects.Image;
 
   constructor() { super({ key: SCENE.GAME }); }
 
@@ -93,18 +98,23 @@ export class GameScene extends Phaser.Scene {
 
     this.buster = new BusterController(this.matter);
     this.buster.create();
-    this.buster.onPhaseChange = (p) => this.onRunPhaseChange(p);
+    this.buster.onPhaseChange = (p) => {
+      this.onRunPhaseChange(p);
+      if (p === 'launched') removeRamp(this.matter, this.rampBodies);
+    };
 
     this.camCtrl = new CameraController(this);
 
-    // Sprite game objects — positioned in update() each frame
-    this.busterSprite = this.add.sprite(BUSTER_START_X, GROUND_Y - 60, KEY.RUNNING, 0)
-      .setDepth(10)
-      .setDisplaySize(90, 90);
-    this.headSprite = this.add.image(BUSTER_START_X, GROUND_Y - 100, KEY.ICON)
-      .setDepth(10)
-      .setDisplaySize(40, 40)
-      .setVisible(false);
+    // Body-part Images — positioned each frame to match physics bodies
+    const mkImg = (key: string, w: number, h: number, depth = 10) =>
+      this.add.image(0, 0, key).setDisplaySize(w, h).setDepth(depth);
+
+    this.imgTorso = mkImg(KEY.BUSTER_TORSO, T_W,   T_H,  10);
+    this.imgHead  = mkImg(KEY.BUSTER_HEAD,  H_R*2, H_R*2, 11); // head on top
+    this.imgArmL  = mkImg(KEY.BUSTER_ARM_L, AL_W,  AL_H,   9); // arms behind torso
+    this.imgArmR  = mkImg(KEY.BUSTER_ARM_R, AR_W,  AR_H,   9);
+    this.imgLegL  = mkImg(KEY.BUSTER_LEG_L, LL_W,  LL_H,   8); // legs furthest back
+    this.imgLegR  = mkImg(KEY.BUSTER_LEG_R, LR_W,  LR_H,   8);
 
     this.sfxRunning = this.sound.add(KEY.SFX_RUNNING, { loop: true });
     this.sfxWoosh   = this.sound.add(KEY.SFX_WOOSH);
@@ -180,8 +190,8 @@ export class GameScene extends Phaser.Scene {
     this.camCtrl.zoomToBuster(pos.x, pos.y, () => {
       this.followBuster = true;
       this.buster.startRun();
-      this.time.delayedCall(8000,  () => { if (!this.firstImpact) this.triggerFailsafe(); });
-      this.time.delayedCall(10000, () => this.doSettleBricks());
+      this.time.delayedCall(20000, () => { if (!this.firstImpact) this.triggerFailsafe(); });
+      this.time.delayedCall(25000, () => this.doSettleBricks());
     });
   }
 
@@ -279,7 +289,7 @@ export class GameScene extends Phaser.Scene {
       }
 
       // First impact
-      if (!this.limbsBroken) {
+      if (!this.limbsBroken && (this.buster.isFlying || this.buster.phase === 'launched')) {
         const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isRamp(b) || isTargetBody(b) || isTargetBrick(b)))
                   || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isRamp(a) || isTargetBody(a) || isTargetBrick(a)));
         if (bHit) {
@@ -397,36 +407,24 @@ export class GameScene extends Phaser.Scene {
   }
 
   private updateBusterSprite(): void {
-    const b = this.buster;
-    const RUN_SPRITE_FRAMES = 5;
-    const RUN_SPRITE_FPS    = 12;
-
-    if (b.runBody) {
-      // Run body visible — show animated or static run sprite
-      this.busterSprite.setVisible(true);
-      this.headSprite.setVisible(false);
-      this.busterSprite.setPosition(b.runBody.position.x, b.runBody.position.y);
-      this.busterSprite.setAngle(Phaser.Math.RadToDeg(b.runBody.angle));
-
-      if (b.phase === 'forward') {
-        // Advance animation frame manually
-        const fps = RUN_SPRITE_FPS;
-        const frameMs = 1000 / fps;
-        const frame = Math.floor((Date.now() / frameMs) % RUN_SPRITE_FRAMES);
-        this.busterSprite.setFrame(frame);
-      } else {
-        this.busterSprite.setFrame(0);
-      }
-    } else if (b.ragdoll && b.ragdoll.buster.parts.length > 2) {
-      // Ragdoll — show head icon at head part position
-      this.busterSprite.setVisible(false);
-      const head = b.ragdoll.buster.parts[2] as MatterJS.BodyType;
-      this.headSprite.setVisible(true);
-      this.headSprite.setPosition(head.position.x, head.position.y);
-      this.headSprite.setAngle(Phaser.Math.RadToDeg(head.angle));
-    } else {
-      this.busterSprite.setVisible(false);
-      this.headSprite.setVisible(false);
+    const rag = this.buster.ragdoll;
+    if (!rag) {
+      [this.imgHead, this.imgTorso, this.imgArmL, this.imgArmR, this.imgLegL, this.imgLegR]
+        .forEach(img => img.setVisible(false));
+      return;
     }
+
+    const place = (img: Phaser.GameObjects.Image, body: MatterJS.BodyType) => {
+      img.setVisible(true)
+         .setPosition(body.position.x, body.position.y)
+         .setRotation(body.angle);
+    };
+
+    place(this.imgTorso, rag.torso);
+    place(this.imgHead,  rag.head);
+    place(this.imgArmL,  rag.armL);
+    place(this.imgArmR,  rag.armR);
+    place(this.imgLegL,  rag.legL);
+    place(this.imgLegR,  rag.legR);
   }
 }

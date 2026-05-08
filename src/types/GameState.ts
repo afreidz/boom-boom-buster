@@ -13,11 +13,11 @@ export const GRAVITY_SCALE     = 0.004;
 export const TIME_SCALE        = 0.9;
 
 // Launch
-export const LAUNCH_SPEED_MIN  = 64;   // at 0% speed
-export const LAUNCH_SPEED_RANGE = 144; // added at 100% speed
+export const LAUNCH_SPEED_MIN  = 50;   // at 0% speed
+export const LAUNCH_SPEED_RANGE = 165; // added at 100% speed  (100% @ 30° ≈ just past all buildings)
 
 // Run animation
-export const RUN_BACKUP_DISTANCE = 2000;
+export const RUN_BACKUP_DISTANCE = 350;
 export const RUN_BACKUP_SPEED    = 5;
 export const RUN_FORWARD_ACCEL   = 0.4;
 export const RUN_FORWARD_MAX     = 50;
@@ -63,9 +63,15 @@ export const SCENE = {
 
 // Texture/audio keys
 export const KEY = {
-  RUNNING:  'running',
-  EXPLODED: 'exploded',
-  ICON:     'busterIcon',
+  RUNNING:       'running',
+  EXPLODED:      'exploded',
+  ICON:          'busterIcon',
+  BUSTER_HEAD:   'busterHead',
+  BUSTER_TORSO:  'busterTorso',
+  BUSTER_ARM_L:  'busterArmL',
+  BUSTER_ARM_R:  'busterArmR',
+  BUSTER_LEG_L:  'busterLegL',
+  BUSTER_LEG_R:  'busterLegR',
   THEME:    'theme',
   SFX_RUNNING: 'sfxRunning',
   SFX_WOOSH:   'sfxWoosh',
