@@ -46,6 +46,11 @@ muteBtn.addEventListener('click', () => {
   muteBtn.textContent = muted ? '🔇' : '🔊';
 });
 
+// Quick-reset failsafe button — reloads the page from scratch
+document.getElementById('reset-quick-btn')!.addEventListener('click', () => {
+  window.location.reload();
+});
+
 window.addEventListener('resize', () => {
   game.scale.resize(window.innerWidth, window.innerHeight);
 });

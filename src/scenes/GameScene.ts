@@ -7,7 +7,7 @@ import {
 } from '../types/GameState';
 import { createBackground, generateClouds, generateTrees } from '../game/BackgroundRenderer';
 import { createRamp, removeRamp, RampBodies } from '../game/RampFactory';
-import { createBuildings, activateTargetBuilding, explodeBuilding, settleBricks, shouldChainExplode, BuildingData } from '../game/BuildingFactory';
+import { createBuildings, activateTargetBuilding, explodeBuilding, shouldChainExplode, BuildingData } from '../game/BuildingFactory';
 import { breakLimbs, T_W, T_H, H_R, AL_W, AL_H, AR_W, AR_H, LL_W, LL_H, LR_W, LR_H } from '../game/RagdollFactory';
 import { BusterController, RunPhase } from '../game/BusterController';
 import { CameraController } from '../game/CameraController';
@@ -35,6 +35,7 @@ export class GameScene extends Phaser.Scene {
 
   private speedInterval: number | null = null;
   private followBuster = false;
+  private restFrames   = 0;
   private theme: Phaser.Sound.BaseSound | null = null;
   private ambientSounds: Phaser.Sound.BaseSound[] = [];
   private sfxRunning!: Phaser.Sound.BaseSound;
@@ -190,8 +191,6 @@ export class GameScene extends Phaser.Scene {
     this.camCtrl.zoomToBuster(pos.x, pos.y, () => {
       this.followBuster = true;
       this.buster.startRun();
-      this.time.delayedCall(20000, () => { if (!this.firstImpact) this.triggerFailsafe(); });
-      this.time.delayedCall(25000, () => this.doSettleBricks());
     });
   }
 
@@ -288,27 +287,17 @@ export class GameScene extends Phaser.Scene {
         }
       }
 
-      // First impact
+      // First impact — start rest-detection; outro fires when Buster settles
       if (!this.limbsBroken && (this.buster.isFlying || this.buster.phase === 'launched')) {
         const bHit = (this.buster.isBusterPart(a) && (isSolid(b) || isGround(b) || isRamp(b) || isTargetBody(b) || isTargetBrick(b)))
                   || (this.buster.isBusterPart(b) && (isSolid(a) || isGround(a) || isRamp(a) || isTargetBody(a) || isTargetBrick(a)));
         if (bHit) {
           this.limbsBroken = true;
+          this.firstImpact = true;
           this.buster.stopFlight();
           if (this.buster.ragdoll) breakLimbs(this.matter, this.buster.ragdoll);
           this.sfxWind.stop();
           this.playImpactSounds();
-          if (!this.firstImpact) {
-            this.firstImpact = true;
-            this.time.delayedCall(2000, () => {
-              if (!this.runComplete) {
-                this.runComplete = true;
-                this.followBuster = false;
-                this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2);
-              }
-              if (!this.hitTarget) this.time.delayedCall(2000, () => this.showResetModal());
-            });
-          }
         }
       }
 
@@ -322,27 +311,6 @@ export class GameScene extends Phaser.Scene {
         }
       }
     }
-  }
-
-  private doSettleBricks(): void {
-    this.stopAllEffects();
-    settleBricks(this.matter, this.buildings.targetBricks);
-    settleBricks(this.matter, this.buildings.secondaryBricks);
-    if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2); }
-    // Always show reset modal after bricks settle
-    this.time.delayedCall(2500, () => this.showResetModal());
-  }
-
-  private triggerFailsafe(): void {
-    if (this.firstImpact) return;
-    this.limbsBroken = true;
-    this.buster.stopFlight();
-    if (this.buster.ragdoll) breakLimbs(this.matter, this.buster.ragdoll);
-    this.firstImpact = true;
-    this.time.delayedCall(2000, () => {
-      if (!this.runComplete) { this.runComplete = true; this.camCtrl.playOutro(BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400, GROUND_Y - TARGET_HEIGHT / 2); }
-      this.time.delayedCall(2500, () => this.showResetModal());
-    });
   }
 
   private showResetModal(): void {
@@ -400,10 +368,32 @@ export class GameScene extends Phaser.Scene {
   update(): void {
     this.updateBusterSprite();
 
+    // Rest detection: once Buster has landed, wait for the torso to stop moving
+    if (this.firstImpact && !this.runComplete && this.buster.ragdoll) {
+      const speed = (this.buster.ragdoll.torso as any).speed as number ?? Infinity;
+      if (speed < 1.5) {
+        if (++this.restFrames >= 90) this.onBusterRest();
+      } else {
+        this.restFrames = 0;
+      }
+    }
+
     if (this.gameStarted && this.followBuster && !this.runComplete) {
       const pos = this.buster.position;
       this.cameras.main.centerOn(pos.x, pos.y);
     }
+  }
+
+  private onBusterRest(): void {
+    if (this.runComplete) return;
+    this.runComplete = true;
+    this.followBuster = false;
+    this.stopAllEffects();
+    this.camCtrl.playOutro(
+      BUILDINGS_START_X + this.targetIndex * BUILDING_SPACING + 400,
+      GROUND_Y - TARGET_HEIGHT / 2,
+    );
+    this.time.delayedCall(3500, () => this.showResetModal());
   }
 
   private updateBusterSprite(): void {
